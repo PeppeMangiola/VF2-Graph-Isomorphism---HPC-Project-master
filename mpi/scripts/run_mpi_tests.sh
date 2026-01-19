@@ -132,8 +132,14 @@ for OPT in "${OPTIMIZERS[@]}"; do
     # File CSV output per questo ottimizzatore
     CSV_FILE="$MPI_OUTPUT_DIR/results_${OPT}.csv"
     
-    # Header CSV
-    printf "Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead\n" > "$CSV_FILE"
+    # --- MODIFICA: Scrivi Header solo se il file NON esiste ---
+    if [ ! -f "$CSV_FILE" ]; then
+        printf "Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead\n" > "$CSV_FILE"
+        echo "[INFO] Creato nuovo file: $CSV_FILE"
+    else
+        echo "[INFO] Append al file esistente: $CSV_FILE"
+    fi
+    # ----------------------------------------------------------
     
     for SIZE in "${SIZES[@]}"; do
         for TYPE in "${TYPES[@]}"; do
@@ -189,6 +195,7 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 fi
                 
                 # Scrivi riga CSV con printf (no newline spurie)
+                # NOTA: >> appende al file, quindi funziona sia per file nuovi che esistenti
                 printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
                     "$SIZE" "$TYPE" "$NODES" "$EDGES" "$RAM_MB" "$NP" \
                     "$TIME_LOAD" "$TIME_VF2" "$TIME_TOTAL" "$SEQ_TIME" \
@@ -200,7 +207,7 @@ for OPT in "${OPTIMIZERS[@]}"; do
     done
     
     echo ""
-    echo "[OK] Risultati salvati in: $CSV_FILE"
+    echo "[OK] Risultati aggiornati in: $CSV_FILE"
     echo ""
 done
 
@@ -214,4 +221,3 @@ echo ""
 echo "Prossimi passi:"
 echo "  - Confronto ottimizzatori: python mpi/scripts/plot_mpi_optimizers.py"
 echo "  - Confronto SEQ vs MPI:    python mpi/scripts/plot_mpi_vs_seq.py"
-echo ""
