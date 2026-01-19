@@ -6,6 +6,9 @@
 # Esegue benchmark MPI per tutti gli ottimizzatori (O0-O3)
 # Calcola speedup rispetto alla versione sequenziale
 # 
+# MODALITÀ APPEND: i nuovi risultati vengono aggiunti ai CSV esistenti
+#                  se il file non esiste, viene creato con header
+#
 # REQUISITI:
 #   - Eseguibili MPI compilati (make mpi)
 #   - Risultati sequenziali in sequential/output/results_O*.csv
@@ -38,6 +41,7 @@ echo "Input:       $INPUT_DIR"
 echo "SEQ Results: $SEQ_OUTPUT_DIR"
 echo "MPI Output:  $MPI_OUTPUT_DIR"
 echo "Processi:    ${PROC_COUNTS[*]}"
+echo "Modalità:    APPEND (preserva risultati precedenti)"
 echo "=========================================="
 echo ""
 
@@ -107,6 +111,23 @@ clean_value() {
     echo "$1" | tr -d '\r\n ' 
 }
 
+# Funzione per creare header CSV se il file non esiste o è vuoto
+ensure_csv_header() {
+    local csv_file=$1
+    local header="Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead"
+    
+    if [ ! -f "$csv_file" ]; then
+        # File non esiste: crea con header
+        echo "$header" > "$csv_file"
+        echo "[INFO] Creato nuovo file CSV: $csv_file"
+    elif [ ! -s "$csv_file" ]; then
+        # File esiste ma è vuoto: aggiungi header
+        echo "$header" > "$csv_file"
+        echo "[INFO] Aggiunto header a file CSV vuoto: $csv_file"
+    fi
+    # Se il file esiste e non è vuoto, non fare nulla (append)
+}
+
 # 7. Benchmark per ogni ottimizzatore
 echo ""
 echo "Inizio benchmark MPI..."
@@ -132,14 +153,8 @@ for OPT in "${OPTIMIZERS[@]}"; do
     # File CSV output per questo ottimizzatore
     CSV_FILE="$MPI_OUTPUT_DIR/results_${OPT}.csv"
     
-    # --- MODIFICA: Scrivi Header solo se il file NON esiste ---
-    if [ ! -f "$CSV_FILE" ]; then
-        printf "Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead\n" > "$CSV_FILE"
-        echo "[INFO] Creato nuovo file: $CSV_FILE"
-    else
-        echo "[INFO] Append al file esistente: $CSV_FILE"
-    fi
-    # ----------------------------------------------------------
+    # Assicura che il file abbia l'header (crea se non esiste, append se esiste)
+    ensure_csv_header "$CSV_FILE"
     
     for SIZE in "${SIZES[@]}"; do
         for TYPE in "${TYPES[@]}"; do
@@ -194,8 +209,7 @@ for OPT in "${OPTIMIZERS[@]}"; do
                     [ -z "$OVERHEAD" ] && OVERHEAD="0"
                 fi
                 
-                # Scrivi riga CSV con printf (no newline spurie)
-                # NOTA: >> appende al file, quindi funziona sia per file nuovi che esistenti
+                # APPEND: Scrivi riga CSV
                 printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
                     "$SIZE" "$TYPE" "$NODES" "$EDGES" "$RAM_MB" "$NP" \
                     "$TIME_LOAD" "$TIME_VF2" "$TIME_TOTAL" "$SEQ_TIME" \
@@ -206,8 +220,10 @@ for OPT in "${OPTIMIZERS[@]}"; do
         done
     done
     
+    # Conta righe nel CSV (escluso header)
+    ROW_COUNT=$(($(wc -l < "$CSV_FILE") - 1))
     echo ""
-    echo "[OK] Risultati aggiornati in: $CSV_FILE"
+    echo "[OK] Risultati aggiunti a: $CSV_FILE (totale: $ROW_COUNT righe)"
     echo ""
 done
 
@@ -215,9 +231,12 @@ echo "=========================================="
 echo "BENCHMARK MPI COMPLETATO"
 echo "=========================================="
 echo ""
-echo "File generati in: $MPI_OUTPUT_DIR"
+echo "File aggiornati in: $MPI_OUTPUT_DIR"
 ls -la "$MPI_OUTPUT_DIR"/*.csv 2>/dev/null
+echo ""
+echo "Nota: I nuovi risultati sono stati AGGIUNTI ai file esistenti"
 echo ""
 echo "Prossimi passi:"
 echo "  - Confronto ottimizzatori: python mpi/scripts/plot_mpi_optimizers.py"
 echo "  - Confronto SEQ vs MPI:    python mpi/scripts/plot_mpi_vs_seq.py"
+echo ""

@@ -8,6 +8,7 @@ Genera grafici che confrontano le performance MPI tra i diversi
 livelli di ottimizzazione del compilatore.
 
 SOLO GRAFI ISOMORFI - SCALA LOGARITMICA
+Usa TUTTE le misurazioni presenti nel CSV e calcola la media.
 
 ==================================================================
 """
@@ -38,7 +39,7 @@ SIZE_ORDER = ['1MB', '50MB', '100MB', '200MB', '500MB']
 # =============================================================================
 
 def load_all_results():
-    """Carica tutti i CSV dei risultati MPI, SOLO grafi isomorfi."""
+    """Carica tutti i CSV dei risultati MPI, SOLO grafi isomorfi - TUTTE LE MISURAZIONI."""
     all_data = []
     
     for opt in OPTIMIZERS:
@@ -49,7 +50,9 @@ def load_all_results():
             # FILTRA SOLO ISO
             df = df[df['Type'] == 'iso']
             all_data.append(df)
-            print(f"[OK] Caricato: {csv_path.name} ({len(df)} righe iso)")
+            n_measurements = len(df)
+            n_per_config = n_measurements // (len(SIZE_ORDER) * len(PROC_COUNTS)) if n_measurements > 0 else 0
+            print(f"[OK] Caricato: {csv_path.name} ({n_measurements} righe iso, ~{n_per_config} misurazioni per config)")
         else:
             print(f"[SKIP] Non trovato: {csv_path.name}")
     
@@ -57,6 +60,15 @@ def load_all_results():
         return None
     
     return pd.concat(all_data, ignore_index=True)
+
+
+def get_mean_value(df, size, np_val, column):
+    """Ottiene il valore medio per una data configurazione."""
+    subset = df[(df['Size'] == size) & (df['NumProcs'] == np_val)]
+    values = subset[column].values
+    if len(values) > 0:
+        return np.mean(values)
+    return 0
 
 
 def plot_time_comparison_by_procs(df):
@@ -79,8 +91,8 @@ def plot_time_comparison_by_procs(df):
             opt_data = data[data['Optimizer'] == opt]
             times = []
             for size in sizes:
-                t = opt_data[opt_data['Size'] == size]['Time_VF2_s'].values
-                times.append(t[0] if len(t) > 0 and t[0] > 0 else 0.001)
+                t = get_mean_value(opt_data, size, np_val, 'Time_VF2_s')
+                times.append(t if t > 0 else 0.001)
             
             offset = (i - 1.5) * width
             ax.bar(x + offset, times, width, label=opt, color=COLORS[opt], alpha=0.8)
@@ -118,8 +130,8 @@ def plot_speedup_by_optimizer(df):
             opt_np_data = df[(df['Optimizer'] == opt) & (df['NumProcs'] == np_val)]
             speedups = []
             for size in sizes:
-                s = opt_np_data[opt_np_data['Size'] == size]['Speedup'].values
-                speedups.append(s[0] if len(s) > 0 else 0)
+                s = get_mean_value(opt_np_data, size, np_val, 'Speedup')
+                speedups.append(s)
             
             offset = (bar_idx - 3.5) * width
             alpha = 0.6 if np_val == 2 else 0.9
@@ -166,8 +178,8 @@ def plot_efficiency_by_optimizer(df):
             opt_np_data = df[(df['Optimizer'] == opt) & (df['NumProcs'] == np_val)]
             efficiencies = []
             for size in sizes:
-                e = opt_np_data[opt_np_data['Size'] == size]['Efficiency'].values
-                efficiencies.append(e[0] if len(e) > 0 else 0)
+                e = get_mean_value(opt_np_data, size, np_val, 'Efficiency')
+                efficiencies.append(e)
             
             offset = (bar_idx - 3.5) * width
             alpha = 0.6 if np_val == 2 else 0.9
@@ -213,8 +225,8 @@ def plot_overhead_by_optimizer(df):
             opt_np_data = df[(df['Optimizer'] == opt) & (df['NumProcs'] == np_val)]
             overheads = []
             for size in sizes:
-                o = opt_np_data[opt_np_data['Size'] == size]['Overhead'].values
-                overheads.append(o[0] if len(o) > 0 else 0)
+                o = get_mean_value(opt_np_data, size, np_val, 'Overhead')
+                overheads.append(o)
             
             offset = (bar_idx - 3.5) * width
             alpha = 0.6 if np_val == 2 else 0.9
@@ -252,24 +264,29 @@ def print_summary_table(df):
     
     for np_val in PROC_COUNTS:
         print(f"\n--- {np_val} PROCESSI ---")
-        print(f"{'Size':<8}", end="")
+        
+        data = df[df['NumProcs'] == np_val]
+        sizes = [s for s in SIZE_ORDER if s in data['Size'].unique()]
+        
+        # Conta misurazioni per configurazione
+        sample_count = len(data[(data['Optimizer'] == 'O3') & (data['Size'] == sizes[0])]) if sizes else 0
+        print(f"Misurazioni per configurazione: ~{sample_count}")
+        
+        print(f"\n{'Size':<8}", end="")
         for opt in OPTIMIZERS:
             print(f"{opt:>12}", end="")
         print(f"{'Best':>10}")
         print("-" * 70)
-        
-        data = df[df['NumProcs'] == np_val]
-        sizes = [s for s in SIZE_ORDER if s in data['Size'].unique()]
         
         for size in sizes:
             print(f"{size:<8}", end="")
             
             times = []
             for opt in OPTIMIZERS:
-                t = data[(data['Optimizer'] == opt) & (data['Size'] == size)]['Time_VF2_s'].values
-                t_val = t[0] if len(t) > 0 else 0
-                times.append((opt, t_val))
-                print(f"{t_val:>12.4f}", end="")
+                opt_data = data[data['Optimizer'] == opt]
+                t = get_mean_value(opt_data, size, np_val, 'Time_VF2_s')
+                times.append((opt, t))
+                print(f"{t:>12.4f}", end="")
             
             # Best optimizer
             valid_times = [(o, t) for o, t in times if t > 0]

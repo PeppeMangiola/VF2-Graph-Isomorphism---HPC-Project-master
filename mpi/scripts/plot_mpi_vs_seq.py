@@ -8,6 +8,7 @@ Genera grafici che confrontano le performance della versione
 sequenziale con la versione MPI (np=2 e np=4).
 
 SOLO GRAFI ISOMORFI - SCALA LOGARITMICA
+Usa TUTTE le misurazioni presenti nel CSV e calcola la media.
 
 ==================================================================
 """
@@ -90,7 +91,7 @@ def load_sequential_results():
 
 
 def load_mpi_results():
-    """Carica risultati MPI, SOLO grafi isomorfi."""
+    """Carica risultati MPI, SOLO grafi isomorfi - TUTTE LE MISURAZIONI."""
     all_data = []
     
     for opt in OPTIMIZERS:
@@ -102,7 +103,9 @@ def load_mpi_results():
             # Filtra solo ISO
             df = df[df['Type'] == 'iso']
             all_data.append(df)
-            print(f"[OK] MPI: {csv_path.name} ({len(df)} righe iso)")
+            n_measurements = len(df)
+            n_per_config = n_measurements // (len(SIZE_ORDER) * len(PROC_COUNTS)) if n_measurements > 0 else 0
+            print(f"[OK] MPI: {csv_path.name} ({n_measurements} righe iso, ~{n_per_config} misurazioni per config)")
         else:
             print(f"[SKIP] MPI non trovato: {csv_path.name}")
     
@@ -110,6 +113,19 @@ def load_mpi_results():
         return None
     
     return pd.concat(all_data, ignore_index=True)
+
+
+def get_mean_time(df, size, np_val=None):
+    """Ottiene il tempo medio per una data configurazione."""
+    if np_val is not None:
+        subset = df[(df['Size'] == size) & (df['NumProcs'] == np_val)]
+    else:
+        subset = df[df['Size'] == size]
+    
+    times = subset['Time_VF2_s'].values
+    if len(times) > 0:
+        return np.mean(times)
+    return 0
 
 
 def plot_time_comparison(seq_df, mpi_df):
@@ -129,29 +145,27 @@ def plot_time_comparison(seq_df, mpi_df):
         x = np.arange(len(sizes))
         width = 0.25
         
-        # Tempi SEQ
+        # Tempi SEQ (media)
         seq_times = []
         for size in sizes:
-            t = seq_opt[seq_opt['Size'] == size]['Time_VF2_s'].values
-            seq_times.append(t[0] if len(t) > 0 and t[0] > 0 else 0.001)
+            t = get_mean_time(seq_opt, size)
+            seq_times.append(t if t > 0 else 0.001)
         
         ax.bar(x - width, seq_times, width, label='Sequenziale', color=COLOR_SEQ, alpha=0.8)
         
-        # Tempi MPI np=2
+        # Tempi MPI np=2 (media di tutte le misurazioni)
         mpi_2_times = []
-        mpi_2_data = mpi_opt[mpi_opt['NumProcs'] == 2]
         for size in sizes:
-            t = mpi_2_data[mpi_2_data['Size'] == size]['Time_VF2_s'].values
-            mpi_2_times.append(t[0] if len(t) > 0 and t[0] > 0 else 0.001)
+            t = get_mean_time(mpi_opt, size, np_val=2)
+            mpi_2_times.append(t if t > 0 else 0.001)
         
         ax.bar(x, mpi_2_times, width, label='MPI np=2', color=COLOR_MPI_2, alpha=0.8)
         
-        # Tempi MPI np=4
+        # Tempi MPI np=4 (media di tutte le misurazioni)
         mpi_4_times = []
-        mpi_4_data = mpi_opt[mpi_opt['NumProcs'] == 4]
         for size in sizes:
-            t = mpi_4_data[mpi_4_data['Size'] == size]['Time_VF2_s'].values
-            mpi_4_times.append(t[0] if len(t) > 0 and t[0] > 0 else 0.001)
+            t = get_mean_time(mpi_opt, size, np_val=4)
+            mpi_4_times.append(t if t > 0 else 0.001)
         
         ax.bar(x + width, mpi_4_times, width, label='MPI np=4', color=COLOR_MPI_4, alpha=0.8)
         
@@ -191,19 +205,17 @@ def plot_speedup_curves(seq_df, mpi_df):
         colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(sizes)))
         
         for i, size in enumerate(sizes):
-            seq_time = seq_opt[seq_opt['Size'] == size]['Time_VF2_s'].values
-            if len(seq_time) == 0 or seq_time[0] == 0:
+            seq_time = get_mean_time(seq_opt, size)
+            if seq_time == 0:
                 continue
-            seq_time = seq_time[0]
             
             procs = [1] + PROC_COUNTS
             speedups = [1.0]
             
             for np_val in PROC_COUNTS:
-                mpi_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                                   (mpi_opt['NumProcs'] == np_val)]['Time_VF2_s'].values
-                if len(mpi_time) > 0 and mpi_time[0] > 0:
-                    speedups.append(seq_time / mpi_time[0])
+                mpi_time = get_mean_time(mpi_opt, size, np_val=np_val)
+                if mpi_time > 0:
+                    speedups.append(seq_time / mpi_time)
                 else:
                     speedups.append(0)
             
@@ -250,25 +262,22 @@ def plot_efficiency(seq_df, mpi_df):
     eff_4 = []
     
     for size in sizes:
-        seq_time = seq_opt[seq_opt['Size'] == size]['Time_VF2_s'].values
-        if len(seq_time) == 0 or seq_time[0] == 0:
+        seq_time = get_mean_time(seq_opt, size)
+        if seq_time == 0:
             eff_2.append(0)
             eff_4.append(0)
             continue
-        seq_time = seq_time[0]
         
-        mpi_2_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                             (mpi_opt['NumProcs'] == 2)]['Time_VF2_s'].values
-        if len(mpi_2_time) > 0 and mpi_2_time[0] > 0:
-            speedup_2 = seq_time / mpi_2_time[0]
+        mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
+        if mpi_2_time > 0:
+            speedup_2 = seq_time / mpi_2_time
             eff_2.append(speedup_2 / 2 * 100)
         else:
             eff_2.append(0)
         
-        mpi_4_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                             (mpi_opt['NumProcs'] == 4)]['Time_VF2_s'].values
-        if len(mpi_4_time) > 0 and mpi_4_time[0] > 0:
-            speedup_4 = seq_time / mpi_4_time[0]
+        mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
+        if mpi_4_time > 0:
+            speedup_4 = seq_time / mpi_4_time
             eff_4.append(speedup_4 / 4 * 100)
         else:
             eff_4.append(0)
@@ -316,20 +325,17 @@ def plot_overhead(seq_df, mpi_df):
     overhead_4 = []
     
     for size in sizes:
-        seq_time = seq_opt[seq_opt['Size'] == size]['Time_VF2_s'].values
-        seq_time = seq_time[0] if len(seq_time) > 0 else 0
+        seq_time = get_mean_time(seq_opt, size)
         
-        mpi_2_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                             (mpi_opt['NumProcs'] == 2)]['Time_VF2_s'].values
-        if len(mpi_2_time) > 0:
-            overhead_2.append(max(0.001, mpi_2_time[0] * 2 - seq_time))
+        mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
+        if mpi_2_time > 0:
+            overhead_2.append(max(0.001, mpi_2_time * 2 - seq_time))
         else:
             overhead_2.append(0.001)
         
-        mpi_4_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                             (mpi_opt['NumProcs'] == 4)]['Time_VF2_s'].values
-        if len(mpi_4_time) > 0:
-            overhead_4.append(max(0.001, mpi_4_time[0] * 4 - seq_time))
+        mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
+        if mpi_4_time > 0:
+            overhead_4.append(max(0.001, mpi_4_time * 4 - seq_time))
         else:
             overhead_4.append(0.001)
     
@@ -370,15 +376,15 @@ def plot_summary_all_optimizers(seq_df, mpi_df):
     for i, opt in enumerate(OPTIMIZERS):
         speedups = []
         
+        seq_opt = seq_df[seq_df['Optimizer'] == opt]
+        mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
+        
         for size in sizes:
-            seq_time = seq_df[(seq_df['Optimizer'] == opt) & 
-                             (seq_df['Size'] == size)]['Time_VF2_s'].values
-            mpi_time = mpi_df[(mpi_df['Optimizer'] == opt) & 
-                             (mpi_df['Size'] == size) &
-                             (mpi_df['NumProcs'] == np_val)]['Time_VF2_s'].values
+            seq_time = get_mean_time(seq_opt, size)
+            mpi_time = get_mean_time(mpi_opt, size, np_val=np_val)
             
-            if len(seq_time) > 0 and len(mpi_time) > 0 and mpi_time[0] > 0:
-                speedups.append(seq_time[0] / mpi_time[0])
+            if seq_time > 0 and mpi_time > 0:
+                speedups.append(seq_time / mpi_time)
             else:
                 speedups.append(0)
         
@@ -418,25 +424,23 @@ def print_comparison_table(seq_df, mpi_df):
         print(f"OTTIMIZZATORE: {opt}")
         print(f"{'─'*110}")
         
-        print(f"{'Size':<8} {'SEQ (s)':>12} {'MPI-2 (s)':>12} {'MPI-4 (s)':>12} {'Speedup-2':>12} {'Speedup-4':>12} {'Eff-4 (%)':>10}")
-        print("-" * 90)
-        
         seq_opt = seq_df[seq_df['Optimizer'] == opt]
         mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
+        
+        # Conta misurazioni
+        n_mpi = len(mpi_opt)
+        n_per_size = n_mpi // (len(SIZE_ORDER) * len(PROC_COUNTS)) if n_mpi > 0 else 0
+        print(f"Misurazioni MPI totali: {n_mpi} (~{n_per_size} per configurazione)")
+        
+        print(f"\n{'Size':<8} {'SEQ (s)':>12} {'MPI-2 (s)':>12} {'MPI-4 (s)':>12} {'Speedup-2':>12} {'Speedup-4':>12} {'Eff-4 (%)':>10}")
+        print("-" * 90)
         
         sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values]
         
         for size in sizes:
-            seq_time = seq_opt[seq_opt['Size'] == size]['Time_VF2_s'].values
-            seq_time = seq_time[0] if len(seq_time) > 0 else 0
-            
-            mpi_2_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                                (mpi_opt['NumProcs'] == 2)]['Time_VF2_s'].values
-            mpi_2_time = mpi_2_time[0] if len(mpi_2_time) > 0 else 0
-            
-            mpi_4_time = mpi_opt[(mpi_opt['Size'] == size) & 
-                                (mpi_opt['NumProcs'] == 4)]['Time_VF2_s'].values
-            mpi_4_time = mpi_4_time[0] if len(mpi_4_time) > 0 else 0
+            seq_time = get_mean_time(seq_opt, size)
+            mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
+            mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
             
             speedup_2 = seq_time / mpi_2_time if mpi_2_time > 0 else 0
             speedup_4 = seq_time / mpi_4_time if mpi_4_time > 0 else 0
