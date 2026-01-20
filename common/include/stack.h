@@ -93,6 +93,7 @@ int stack_push(Stack* stack, int node, const int* candidates, int num_candidates
  */
 int stack_pop(Stack* stack);
 
+void stack_clear(Stack* s);
 /**
  * Restituisce puntatore all'elemento in cima senza rimuoverlo
  * @param stack Stack

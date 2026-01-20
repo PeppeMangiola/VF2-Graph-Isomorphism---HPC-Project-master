@@ -32,6 +32,7 @@ COMMON_INC   = common/include
 COMMON_SRC   = common/src
 SEQ_SRC      = sequential/src
 OMP_SRC      = openmp/src
+OMP_INC      = openmp/include
 MPI_SRC      = mpi/src
 MPI_INC      = mpi/include
 CUDA_SRC     = cuda/src
@@ -47,16 +48,20 @@ COMMON_HEADERS = $(wildcard $(COMMON_INC)/*.h)
 MPI_SOURCES    = $(MPI_SRC)/vf2pp_mpi.c
 MPI_HEADERS    = $(MPI_INC)/vf2pp_mpi.h
 
+# File sorgenti OpenMP specifici
+OMP_SOURCES    = $(OMP_SRC)/vf2pp_openmp.c
+OMP_HEADERS    = $(OMP_INC)/vf2pp_openmp.h
+
 # =============================================================================
 # TARGET PRINCIPALI
 # =============================================================================
 
 .PHONY: all clean help gen_inputs inputs test sequential openmp mpi cuda \
-        test_seq benchmark_seq test_mpi benchmark_mpi \
+        test_seq benchmark_seq test_mpi benchmark_mpi test_openmp benchmark_openmp \
         inputs_batch benchmark_batch
 
-all: sequential
-	@echo "=== Build completata ==="
+all: sequential openmp mpi
+	@echo "=== Build completata (SEQ, OpenMP, MPI) ==="
 
 help:
 	@echo "=============================================="
@@ -70,6 +75,7 @@ help:
 	@echo "  make openmp       - Compila versione OpenMP (O0-O3)"
 	@echo "  make mpi          - Compila versione MPI (O0-O3)"
 	@echo "  make cuda         - Compila versione CUDA (O0-O3)"
+	@echo "  make all          - Compila SEQ + OpenMP + MPI"
 	@echo ""
 	@echo "INPUT (WSL con python3):"
 	@echo "  make inputs       - Genera input test (1MB-500MB)"
@@ -79,6 +85,10 @@ help:
 	@echo "  make test_seq     - Test rapido su 1MB"
 	@echo "  make benchmark_seq- Benchmark completo (O0-O3)"
 	@echo ""
+	@echo "BENCHMARK OPENMP (WSL):"
+	@echo "  make test_openmp    - Test rapido OpenMP (1MB, 4 thread)"
+	@echo "  make benchmark_openmp - Benchmark completo (O0-O3, 1-8 thread)"
+	@echo ""
 	@echo "BENCHMARK MPI (WSL):"
 	@echo "  make test_mpi       - Test rapido MPI (1MB, np=2)"
 	@echo "  make benchmark_mpi  - Benchmark single-pair (O0-O3, np=2,4)"
@@ -87,9 +97,9 @@ help:
 	@echo ">>> GRAFICI - ESEGUIRE DA POWERSHELL <<<"
 	@echo ""
 	@echo "  python sequential\\scripts\\plot_benchmark.py"
+	@echo "  python openmp\\scripts\\plot_openmp_results.py"
 	@echo "  python mpi\\scripts\\plot_mpi_optimizers.py"
 	@echo "  python mpi\\scripts\\plot_mpi_vs_seq.py"
-	@echo "  python mpi\\scripts\\plot_batch_results.py"
 	@echo ""
 	@echo "PULIZIA (WSL):"
 	@echo "  make clean        - Rimuove build/"
@@ -146,22 +156,25 @@ $(BUILD_DIR)/vf2pp_seq_O3: $(SEQ_MAIN) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(B
 # VERSIONE OPENMP
 # =============================================================================
 
-OMP_MAIN = $(OMP_SRC)/main_omp.c
+OMP_MAIN    = $(OMP_SRC)/main_openmp.c
+OMP_VF2     = $(OMP_SRC)/vf2pp_openmp.c
+OMP_ALL_SRC = $(OMP_MAIN) $(OMP_VF2) $(COMMON_SOURCES)
+OMP_ALL_INC = -I$(COMMON_INC) -I$(OMP_INC)
 
-openmp: $(addprefix $(BUILD_DIR)/vf2pp_omp_, $(OPT_LEVELS))
+openmp: $(addprefix $(BUILD_DIR)/vf2pp_openmp_, $(OPT_LEVELS))
 	@echo "[OK] Versione OpenMP compilata (O0-O3)"
 
-$(BUILD_DIR)/vf2pp_omp_O0: $(OMP_MAIN) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS_BASE) -O0 -g $(OMP_FLAGS) -I$(COMMON_INC) $(OMP_MAIN) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+$(BUILD_DIR)/vf2pp_openmp_O0: $(OMP_MAIN) $(OMP_VF2) $(COMMON_SOURCES) $(COMMON_HEADERS) $(OMP_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS_BASE) -O0 -g $(OMP_FLAGS) $(OMP_ALL_INC) $(OMP_ALL_SRC) -o $@ $(LDFLAGS)
 
-$(BUILD_DIR)/vf2pp_omp_O1: $(OMP_MAIN) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS_BASE) -O1 $(OMP_FLAGS) -I$(COMMON_INC) $(OMP_MAIN) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+$(BUILD_DIR)/vf2pp_openmp_O1: $(OMP_MAIN) $(OMP_VF2) $(COMMON_SOURCES) $(COMMON_HEADERS) $(OMP_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS_BASE) -O1 $(OMP_FLAGS) $(OMP_ALL_INC) $(OMP_ALL_SRC) -o $@ $(LDFLAGS)
 
-$(BUILD_DIR)/vf2pp_omp_O2: $(OMP_MAIN) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS_BASE) -O2 $(OMP_FLAGS) -I$(COMMON_INC) $(OMP_MAIN) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+$(BUILD_DIR)/vf2pp_openmp_O2: $(OMP_MAIN) $(OMP_VF2) $(COMMON_SOURCES) $(COMMON_HEADERS) $(OMP_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS_BASE) -O2 $(OMP_FLAGS) $(OMP_ALL_INC) $(OMP_ALL_SRC) -o $@ $(LDFLAGS)
 
-$(BUILD_DIR)/vf2pp_omp_O3: $(OMP_MAIN) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS_BASE) -O3 $(OMP_FLAGS) -I$(COMMON_INC) $(OMP_MAIN) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+$(BUILD_DIR)/vf2pp_openmp_O3: $(OMP_MAIN) $(OMP_VF2) $(COMMON_SOURCES) $(COMMON_HEADERS) $(OMP_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS_BASE) -O3 $(OMP_FLAGS) $(OMP_ALL_INC) $(OMP_ALL_SRC) -o $@ $(LDFLAGS)
 
 # =============================================================================
 # VERSIONE MPI
@@ -230,6 +243,28 @@ benchmark_seq: sequential
 	@echo "       python sequential\\scripts\\plot_benchmark.py"
 
 # =============================================================================
+# TEST E BENCHMARK OPENMP (WSL)
+# =============================================================================
+
+test_openmp: openmp
+	@echo "=== Test rapido OpenMP (1MB, 4 thread) ==="
+	@mkdir -p openmp/output
+	@echo "--- Grafi isomorfi ---"
+	OMP_NUM_THREADS=4 ./$(BUILD_DIR)/vf2pp_openmp_O3 $(INPUT_DIR)/1MB_iso_g1.txt $(INPUT_DIR)/1MB_iso_g2.txt 1
+	@echo ""
+	@echo "--- Grafi non isomorfi ---"
+	OMP_NUM_THREADS=4 ./$(BUILD_DIR)/vf2pp_openmp_O3 $(INPUT_DIR)/1MB_diff_g1.txt $(INPUT_DIR)/1MB_diff_g2.txt 1
+
+benchmark_openmp: sequential openmp
+	@echo "=== Benchmark OpenMP ==="
+	@mkdir -p openmp/output
+	@mkdir -p openmp/plots
+	bash openmp/scripts/run_openmp_tests.sh
+	@echo ""
+	@echo "[INFO] Per grafici, esegui da PowerShell:"
+	@echo "       python openmp\\scripts\\plot_openmp_results.py"
+
+# =============================================================================
 # TEST E BENCHMARK MPI (WSL)
 # =============================================================================
 
@@ -275,6 +310,8 @@ clean:
 clean_results:
 	rm -f sequential/output/*.csv
 	rm -f sequential/plots/*.png
+	rm -f openmp/output/*.csv
+	rm -f openmp/plots/*.png
 	rm -f mpi/output/*.csv
 	rm -f mpi/plots/*.png
 	@echo "[OK] Risultati rimossi"

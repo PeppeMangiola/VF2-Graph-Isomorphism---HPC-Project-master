@@ -190,3 +190,9 @@ int stack_size(const Stack* stack) {
     }
     return stack->top + 1;
 }
+
+void stack_clear(Stack* s) {
+    if (s) {
+        s->top = -1; // O s->size = 0, verifica come si chiama il contatore
+    }
+}
