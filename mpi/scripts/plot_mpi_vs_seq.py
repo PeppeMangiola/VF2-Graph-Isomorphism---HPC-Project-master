@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
 ==================================================================
-VF2++ - Confronto Sequenziale vs MPI
+VF2++ - Confronto Sequenziale vs MPI (Versione Completa)
 ==================================================================
 
 Genera grafici che confrontano le performance della versione
-sequenziale con la versione MPI (np=2 e np=4).
+sequenziale con la versione MPI.
 
-SOLO GRAFI ISOMORFI - SCALA LOGARITMICA
-Usa TUTTE le misurazioni presenti nel CSV e calcola la media.
+Include: Tempi, Speedup, Efficienza, Overhead, Throughput
+SEPARATI per GRAFI ISOMORFI e NON ISOMORFI
 
 ==================================================================
 """
 
 import os
-import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,55 +33,43 @@ OPTIMIZERS = ["O0", "O1", "O2", "O3"]
 PROC_COUNTS = [2, 4]
 SIZE_ORDER = ['1MB', '50MB', '100MB', '200MB', '500MB']
 
-# Mappa Size a indice riga nel CSV sequenziale (0-based, dopo header)
-# Solo ISO: righe 0, 2, 4, 6, 8
-SEQ_ROW_MAP = {
-    '1MB': 0,
-    '50MB': 2,
-    '100MB': 4,
-    '200MB': 6,
-    '500MB': 8,
-}
-
-# Colori
 COLOR_SEQ = '#3498db'
 COLOR_MPI_2 = '#e74c3c'
 COLOR_MPI_4 = '#2ecc71'
+COLOR_ISO = '#3498db'
+COLOR_DIFF = '#e74c3c'
+
+plt.style.use('seaborn-v0_8-whitegrid')
+DPI = 150
 
 # =============================================================================
-# FUNZIONI
+# FUNZIONI CARICAMENTO
 # =============================================================================
 
 def load_sequential_results():
-    """Carica risultati sequenziali, SOLO grafi isomorfi."""
+    """Carica risultati sequenziali."""
     all_data = []
     
     for opt in OPTIMIZERS:
         csv_path = SEQ_OUTPUT_DIR / f"results_{opt}.csv"
         if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            df['Optimizer'] = opt
-            df['Version'] = 'SEQ'
-            df['NumProcs'] = 1
-            
-            # Aggiungi Size basandosi sull'ordine (solo righe ISO: 0, 2, 4, 6, 8)
-            sizes = []
-            for idx in range(len(df)):
-                for size, row_idx in SEQ_ROW_MAP.items():
-                    if row_idx == idx:
-                        sizes.append(size)
-                        break
-                else:
-                    sizes.append(None)
-            
-            df['Size'] = sizes
-            # Filtra solo righe ISO (quelle con Size non None)
-            df = df[df['Size'].notna()]
-            
-            all_data.append(df)
-            print(f"[OK] SEQ: {csv_path.name} ({len(df)} righe iso)")
-        else:
-            print(f"[SKIP] SEQ non trovato: {csv_path.name}")
+            try:
+                df = pd.read_csv(csv_path)
+                df['Optimizer'] = opt
+                df['NumProcs'] = 1
+                
+                if 'Type' not in df.columns and 'Isomorphic' in df.columns:
+                    df['Type'] = df['Isomorphic'].apply(lambda x: 'iso' if x == 1 else 'diff')
+                
+                # Calcola Throughput se non presente
+                if 'Throughput_MB_s' not in df.columns and 'RAM_Graph_MB' in df.columns:
+                    df['Throughput_MB_s'] = df.apply(
+                        lambda r: r['RAM_Graph_MB'] / r['Time_VF2_s'] if r['Time_VF2_s'] > 0 else 0, axis=1)
+                
+                all_data.append(df)
+                print(f"[OK] SEQ: {csv_path.name} ({len(df)} righe)")
+            except Exception as e:
+                print(f"[ERRORE] {csv_path.name}: {e}")
     
     if not all_data:
         return None
@@ -91,23 +78,25 @@ def load_sequential_results():
 
 
 def load_mpi_results():
-    """Carica risultati MPI, SOLO grafi isomorfi - TUTTE LE MISURAZIONI."""
+    """Carica risultati MPI."""
     all_data = []
     
     for opt in OPTIMIZERS:
         csv_path = MPI_OUTPUT_DIR / f"results_{opt}.csv"
         if csv_path.exists():
-            df = pd.read_csv(csv_path)
-            df['Optimizer'] = opt
-            df['Version'] = 'MPI'
-            # Filtra solo ISO
-            df = df[df['Type'] == 'iso']
-            all_data.append(df)
-            n_measurements = len(df)
-            n_per_config = n_measurements // (len(SIZE_ORDER) * len(PROC_COUNTS)) if n_measurements > 0 else 0
-            print(f"[OK] MPI: {csv_path.name} ({n_measurements} righe iso, ~{n_per_config} misurazioni per config)")
-        else:
-            print(f"[SKIP] MPI non trovato: {csv_path.name}")
+            try:
+                df = pd.read_csv(csv_path)
+                df['Optimizer'] = opt
+                
+                # Calcola Throughput se non presente
+                if 'Throughput_MB_s' not in df.columns and 'RAM_MB' in df.columns:
+                    df['Throughput_MB_s'] = df.apply(
+                        lambda r: r['RAM_MB'] / r['Time_VF2_s'] if r['Time_VF2_s'] > 0 else 0, axis=1)
+                
+                all_data.append(df)
+                print(f"[OK] MPI: {csv_path.name} ({len(df)} righe)")
+            except Exception as e:
+                print(f"[ERRORE] {csv_path.name}: {e}")
     
     if not all_data:
         return None
@@ -115,64 +104,62 @@ def load_mpi_results():
     return pd.concat(all_data, ignore_index=True)
 
 
-def get_mean_time(df, size, np_val=None):
-    """Ottiene il tempo medio per una data configurazione."""
-    if np_val is not None:
-        subset = df[(df['Size'] == size) & (df['NumProcs'] == np_val)]
-    else:
-        subset = df[df['Size'] == size]
-    
-    times = subset['Time_VF2_s'].values
-    if len(times) > 0:
-        return np.mean(times)
+def get_seq_value(df, size, column, graph_type='iso', opt='O3'):
+    """Ottiene valore sequenziale."""
+    subset = df[(df['Size'] == size) & (df['Type'] == graph_type) & (df['Optimizer'] == opt)]
+    if not subset.empty and column in subset.columns:
+        return subset[column].mean()
     return 0
 
 
-def plot_time_comparison(seq_df, mpi_df):
-    """Grafico: Confronto tempi SEQ vs MPI per ogni ottimizzatore - SCALA LOG."""
+def get_mpi_value(df, size, np_val, column, graph_type='iso', opt='O3'):
+    """Ottiene valore MPI."""
+    subset = df[(df['Size'] == size) & (df['NumProcs'] == np_val) & 
+                (df['Type'] == graph_type) & (df['Optimizer'] == opt)]
+    if not subset.empty and column in subset.columns:
+        return subset[column].mean()
+    return 0
+
+
+# =============================================================================
+# GRAFICI CONFRONTO TEMPI
+# =============================================================================
+
+def plot_time_comparison(seq_df, mpi_df, graph_type='iso'):
+    """Confronto tempi SEQ vs MPI per ogni ottimizzatore."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
     
     for opt in OPTIMIZERS:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
         seq_opt = seq_df[seq_df['Optimizer'] == opt]
         mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
         
-        sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values or s in mpi_opt['Size'].values]
+        if seq_opt.empty and mpi_opt.empty:
+            continue
         
+        sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].unique() or s in mpi_opt['Size'].unique()]
         if not sizes:
             continue
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
         
         x = np.arange(len(sizes))
         width = 0.25
         
-        # Tempi SEQ (media)
-        seq_times = []
-        for size in sizes:
-            t = get_mean_time(seq_opt, size)
-            seq_times.append(t if t > 0 else 0.001)
+        # SEQ
+        seq_times = [get_seq_value(seq_df, s, 'Time_VF2_s', graph_type, opt) or 0.001 for s in sizes]
+        ax.bar(x - width, seq_times, width, label='SEQ', color=COLOR_SEQ, alpha=0.9)
         
-        ax.bar(x - width, seq_times, width, label='Sequenziale', color=COLOR_SEQ, alpha=0.8)
-        
-        # Tempi MPI np=2 (media di tutte le misurazioni)
-        mpi_2_times = []
-        for size in sizes:
-            t = get_mean_time(mpi_opt, size, np_val=2)
-            mpi_2_times.append(t if t > 0 else 0.001)
-        
+        # MPI np=2
+        mpi_2_times = [get_mpi_value(mpi_df, s, 2, 'Time_VF2_s', graph_type, opt) or 0.001 for s in sizes]
         ax.bar(x, mpi_2_times, width, label='MPI np=2', color=COLOR_MPI_2, alpha=0.8)
         
-        # Tempi MPI np=4 (media di tutte le misurazioni)
-        mpi_4_times = []
-        for size in sizes:
-            t = get_mean_time(mpi_opt, size, np_val=4)
-            mpi_4_times.append(t if t > 0 else 0.001)
-        
+        # MPI np=4
+        mpi_4_times = [get_mpi_value(mpi_df, s, 4, 'Time_VF2_s', graph_type, opt) or 0.001 for s in sizes]
         ax.bar(x + width, mpi_4_times, width, label='MPI np=4', color=COLOR_MPI_4, alpha=0.8)
         
-        ax.set_xlabel('Dimensione Input', fontsize=12)
-        ax.set_ylabel('Tempo VF2++ (s) - Scala Log', fontsize=12)
-        ax.set_title(f'Confronto SEQ vs MPI - Ottimizzatore {opt} (Grafi Isomorfi)', 
-                     fontsize=14, fontweight='bold')
+        ax.set_xlabel('Dimensione Input', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Tempo VF2++ (s) - Scala Log', fontsize=12, fontweight='bold')
+        ax.set_title(f'Confronto SEQ vs MPI - {opt}\n(Grafi {type_label})', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(sizes)
         ax.set_yscale('log')
@@ -180,15 +167,19 @@ def plot_time_comparison(seq_df, mpi_df):
         ax.grid(True, alpha=0.3, axis='y')
         
         plt.tight_layout()
-        
-        filepath = PLOTS_DIR / f"seq_vs_mpi_{opt}.png"
-        plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+        filepath = PLOTS_DIR / f"seq_vs_mpi_{opt}_{graph_type}.png"
+        plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
         plt.close()
         print(f"[GRAFICO] {filepath.name}")
 
 
-def plot_speedup_curves(seq_df, mpi_df):
-    """Grafico: Curve di speedup al variare di np."""
+# =============================================================================
+# SPEEDUP CURVES
+# =============================================================================
+
+def plot_speedup_curves(seq_df, mpi_df, graph_type='iso'):
+    """Curve di speedup."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()
@@ -196,16 +187,13 @@ def plot_speedup_curves(seq_df, mpi_df):
     for idx, opt in enumerate(OPTIMIZERS):
         ax = axes[idx]
         
-        seq_opt = seq_df[seq_df['Optimizer'] == opt]
-        mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
-        
-        sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values]
+        sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
         
         markers = ['o', 's', '^', 'D', 'v']
         colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(sizes)))
         
         for i, size in enumerate(sizes):
-            seq_time = get_mean_time(seq_opt, size)
+            seq_time = get_seq_value(seq_df, size, 'Time_VF2_s', graph_type, opt)
             if seq_time == 0:
                 continue
             
@@ -213,18 +201,13 @@ def plot_speedup_curves(seq_df, mpi_df):
             speedups = [1.0]
             
             for np_val in PROC_COUNTS:
-                mpi_time = get_mean_time(mpi_opt, size, np_val=np_val)
-                if mpi_time > 0:
-                    speedups.append(seq_time / mpi_time)
-                else:
-                    speedups.append(0)
+                mpi_time = get_mpi_value(mpi_df, size, np_val, 'Time_VF2_s', graph_type, opt)
+                speedups.append(seq_time / mpi_time if mpi_time > 0 else 0)
             
             ax.plot(procs, speedups, marker=markers[i % len(markers)], 
                    color=colors[i], linewidth=2, markersize=10, label=size)
         
-        # Linea speedup ideale
-        ax.plot([1, max(PROC_COUNTS)], [1, max(PROC_COUNTS)], 
-               'k--', alpha=0.5, linewidth=2, label='Ideale')
+        ax.plot([1, max(PROC_COUNTS)], [1, max(PROC_COUNTS)], 'k--', alpha=0.5, linewidth=2, label='Ideale')
         
         ax.set_xlabel('Numero Processi', fontsize=11)
         ax.set_ylabel('Speedup', fontsize=11)
@@ -234,26 +217,27 @@ def plot_speedup_curves(seq_df, mpi_df):
         ax.grid(True, alpha=0.3)
         ax.set_ylim(0, max(PROC_COUNTS) + 0.5)
     
-    plt.suptitle('Speedup MPI vs Sequenziale (Grafi Isomorfi)', fontsize=14, fontweight='bold')
+    plt.suptitle(f'Speedup MPI vs Sequenziale (Grafi {type_label})', fontsize=14, fontweight='bold')
     plt.tight_layout()
     
-    filepath = PLOTS_DIR / "speedup_curves.png"
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    filepath = PLOTS_DIR / f"speedup_curves_{graph_type}.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"[GRAFICO] {filepath.name}")
 
 
-def plot_efficiency(seq_df, mpi_df):
-    """Grafico: Efficienza parallela."""
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
+# =============================================================================
+# EFFICIENZA
+# =============================================================================
+
+def plot_efficiency(seq_df, mpi_df, graph_type='iso'):
+    """Efficienza parallela."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
     
     opt = 'O3'
+    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
     
-    seq_opt = seq_df[seq_df['Optimizer'] == opt]
-    mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
-    
-    sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values]
+    fig, ax = plt.subplots(figsize=(12, 6))
     
     x = np.arange(len(sizes))
     width = 0.35
@@ -262,36 +246,23 @@ def plot_efficiency(seq_df, mpi_df):
     eff_4 = []
     
     for size in sizes:
-        seq_time = get_mean_time(seq_opt, size)
-        if seq_time == 0:
-            eff_2.append(0)
-            eff_4.append(0)
-            continue
+        seq_time = get_seq_value(seq_df, size, 'Time_VF2_s', graph_type, opt)
         
-        mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
-        if mpi_2_time > 0:
-            speedup_2 = seq_time / mpi_2_time
-            eff_2.append(speedup_2 / 2 * 100)
-        else:
-            eff_2.append(0)
+        mpi_2_time = get_mpi_value(mpi_df, size, 2, 'Time_VF2_s', graph_type, opt)
+        eff_2.append((seq_time / mpi_2_time / 2 * 100) if mpi_2_time > 0 else 0)
         
-        mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
-        if mpi_4_time > 0:
-            speedup_4 = seq_time / mpi_4_time
-            eff_4.append(speedup_4 / 4 * 100)
-        else:
-            eff_4.append(0)
+        mpi_4_time = get_mpi_value(mpi_df, size, 4, 'Time_VF2_s', graph_type, opt)
+        eff_4.append((seq_time / mpi_4_time / 4 * 100) if mpi_4_time > 0 else 0)
     
     ax.bar(x - width/2, eff_2, width, label='MPI np=2', color=COLOR_MPI_2, alpha=0.8)
     ax.bar(x + width/2, eff_4, width, label='MPI np=4', color=COLOR_MPI_4, alpha=0.8)
     
-    ax.axhline(y=100, color='green', linestyle='--', alpha=0.7, linewidth=2, label='Efficienza ideale (100%)')
-    ax.axhline(y=50, color='orange', linestyle=':', alpha=0.7, linewidth=1.5, label='50%')
+    ax.axhline(y=100, color='green', linestyle='--', alpha=0.7, linewidth=2, label='Ideale 100%')
+    ax.axhline(y=50, color='orange', linestyle=':', alpha=0.7, linewidth=1.5)
     
-    ax.set_xlabel('Dimensione Input', fontsize=12)
-    ax.set_ylabel('Efficienza (%)', fontsize=12)
-    ax.set_title(f'Efficienza Parallela MPI - Ottimizzatore {opt} (Grafi Isomorfi)', 
-                fontsize=14, fontweight='bold')
+    ax.set_xlabel('Dimensione Input', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Efficienza (%)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Efficienza Parallela MPI - {opt}\n(Grafi {type_label})', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(sizes)
     ax.legend()
@@ -299,24 +270,24 @@ def plot_efficiency(seq_df, mpi_df):
     ax.set_ylim(0, 120)
     
     plt.tight_layout()
-    
-    filepath = PLOTS_DIR / "efficiency.png"
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    filepath = PLOTS_DIR / f"efficiency_{graph_type}.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"[GRAFICO] {filepath.name}")
 
 
-def plot_overhead(seq_df, mpi_df):
-    """Grafico: Overhead di parallelizzazione - SCALA LOG."""
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
+# =============================================================================
+# OVERHEAD
+# =============================================================================
+
+def plot_overhead(seq_df, mpi_df, graph_type='iso'):
+    """Overhead di parallelizzazione."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
     
     opt = 'O3'
+    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
     
-    seq_opt = seq_df[seq_df['Optimizer'] == opt]
-    mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
-    
-    sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values]
+    fig, ax = plt.subplots(figsize=(12, 6))
     
     x = np.arange(len(sizes))
     width = 0.35
@@ -325,27 +296,20 @@ def plot_overhead(seq_df, mpi_df):
     overhead_4 = []
     
     for size in sizes:
-        seq_time = get_mean_time(seq_opt, size)
+        seq_time = get_seq_value(seq_df, size, 'Time_VF2_s', graph_type, opt)
         
-        mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
-        if mpi_2_time > 0:
-            overhead_2.append(max(0.001, mpi_2_time * 2 - seq_time))
-        else:
-            overhead_2.append(0.001)
+        mpi_2_time = get_mpi_value(mpi_df, size, 2, 'Time_VF2_s', graph_type, opt)
+        overhead_2.append(max(0.001, mpi_2_time * 2 - seq_time) if mpi_2_time > 0 else 0.001)
         
-        mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
-        if mpi_4_time > 0:
-            overhead_4.append(max(0.001, mpi_4_time * 4 - seq_time))
-        else:
-            overhead_4.append(0.001)
+        mpi_4_time = get_mpi_value(mpi_df, size, 4, 'Time_VF2_s', graph_type, opt)
+        overhead_4.append(max(0.001, mpi_4_time * 4 - seq_time) if mpi_4_time > 0 else 0.001)
     
     ax.bar(x - width/2, overhead_2, width, label='MPI np=2', color=COLOR_MPI_2, alpha=0.8)
     ax.bar(x + width/2, overhead_4, width, label='MPI np=4', color=COLOR_MPI_4, alpha=0.8)
     
-    ax.set_xlabel('Dimensione Input', fontsize=12)
-    ax.set_ylabel('Overhead (s) - Scala Log', fontsize=12)
-    ax.set_title(f'Overhead di Parallelizzazione (T_mpi × NP - T_seq) - {opt} (Grafi Isomorfi)', 
-                fontsize=14, fontweight='bold')
+    ax.set_xlabel('Dimensione Input', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Overhead (s) - Scala Log', fontsize=12, fontweight='bold')
+    ax.set_title(f'Overhead MPI - {opt}\n(Grafi {type_label})', fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(sizes)
     ax.set_yscale('log')
@@ -353,21 +317,67 @@ def plot_overhead(seq_df, mpi_df):
     ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
-    
-    filepath = PLOTS_DIR / "overhead.png"
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    filepath = PLOTS_DIR / f"overhead_{graph_type}.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"[GRAFICO] {filepath.name}")
 
 
-def plot_summary_all_optimizers(seq_df, mpi_df):
-    """Grafico riassuntivo: Speedup per tutti gli ottimizzatori."""
+# =============================================================================
+# THROUGHPUT
+# =============================================================================
+
+def plot_throughput_comparison(seq_df, mpi_df, graph_type='iso'):
+    """Confronto throughput SEQ vs MPI."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
+    
+    opt = 'O3'
+    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    np_val = 4
+    x = np.arange(len(sizes))
+    width = 0.25
     
-    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].values]
+    # SEQ throughput
+    seq_thr = [get_seq_value(seq_df, s, 'Throughput_MB_s', graph_type, opt) for s in sizes]
+    ax.bar(x - width, seq_thr, width, label='SEQ', color=COLOR_SEQ, alpha=0.9)
+    
+    # MPI np=2
+    mpi_2_thr = [get_mpi_value(mpi_df, s, 2, 'Throughput_MB_s', graph_type, opt) for s in sizes]
+    ax.bar(x, mpi_2_thr, width, label='MPI np=2', color=COLOR_MPI_2, alpha=0.8)
+    
+    # MPI np=4
+    mpi_4_thr = [get_mpi_value(mpi_df, s, 4, 'Throughput_MB_s', graph_type, opt) for s in sizes]
+    ax.bar(x + width, mpi_4_thr, width, label='MPI np=4', color=COLOR_MPI_4, alpha=0.8)
+    
+    ax.set_xlabel('Dimensione Input', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Throughput (MB/s)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Throughput: SEQ vs MPI - {opt}\n(Grafi {type_label})', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(sizes)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    filepath = PLOTS_DIR / f"throughput_seq_vs_mpi_{graph_type}.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"[GRAFICO] {filepath.name}")
+
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+def plot_summary_all_optimizers(seq_df, mpi_df, graph_type='iso'):
+    """Speedup riassuntivo per tutti gli ottimizzatori."""
+    type_label = "Isomorfi" if graph_type == 'iso' else "Non Isomorfi"
+    
+    np_val = 4
+    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
     
     x = np.arange(len(sizes))
     width = 0.2
@@ -375,28 +385,20 @@ def plot_summary_all_optimizers(seq_df, mpi_df):
     
     for i, opt in enumerate(OPTIMIZERS):
         speedups = []
-        
-        seq_opt = seq_df[seq_df['Optimizer'] == opt]
-        mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
-        
         for size in sizes:
-            seq_time = get_mean_time(seq_opt, size)
-            mpi_time = get_mean_time(mpi_opt, size, np_val=np_val)
-            
-            if seq_time > 0 and mpi_time > 0:
-                speedups.append(seq_time / mpi_time)
-            else:
-                speedups.append(0)
+            seq_time = get_seq_value(seq_df, size, 'Time_VF2_s', graph_type, opt)
+            mpi_time = get_mpi_value(mpi_df, size, np_val, 'Time_VF2_s', graph_type, opt)
+            speedups.append(seq_time / mpi_time if mpi_time > 0 else 0)
         
         offset = (i - 1.5) * width
         ax.bar(x + offset, speedups, width, label=opt, color=colors[opt], alpha=0.8)
     
-    ax.axhline(y=1, color='red', linestyle='--', alpha=0.7, linewidth=2, label='Speedup=1 (no gain)')
+    ax.axhline(y=1, color='red', linestyle='--', alpha=0.7, linewidth=2, label='Speedup=1')
     ax.axhline(y=np_val, color='green', linestyle=':', alpha=0.7, linewidth=2, label=f'Ideale ({np_val}x)')
     
-    ax.set_xlabel('Dimensione Input', fontsize=12)
-    ax.set_ylabel(f'Speedup (SEQ / MPI np={np_val})', fontsize=12)
-    ax.set_title(f'Speedup MPI vs Sequenziale - Tutti gli Ottimizzatori (np={np_val}, Grafi Isomorfi)', 
+    ax.set_xlabel('Dimensione Input', fontsize=12, fontweight='bold')
+    ax.set_ylabel(f'Speedup (SEQ / MPI np={np_val})', fontsize=12, fontweight='bold')
+    ax.set_title(f'Speedup MPI - Tutti gli Ottimizzatori\n(np={np_val}, Grafi {type_label})', 
                 fontsize=14, fontweight='bold')
     ax.set_xticks(x)
     ax.set_xticklabels(sizes)
@@ -405,50 +407,118 @@ def plot_summary_all_optimizers(seq_df, mpi_df):
     ax.set_ylim(0, np_val + 1)
     
     plt.tight_layout()
-    
-    filepath = PLOTS_DIR / "speedup_summary.png"
-    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
+    filepath = PLOTS_DIR / f"speedup_summary_{graph_type}.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f"[GRAFICO] {filepath.name}")
 
 
-def print_comparison_table(seq_df, mpi_df):
-    """Stampa tabella comparativa."""
+def plot_iso_vs_diff(seq_df, mpi_df):
+    """Confronto ISO vs DIFF."""
+    print("\n[PLOT] Confronto ISO vs DIFF...")
     
-    print("\n" + "=" * 110)
-    print("CONFRONTO SEQUENZIALE vs MPI (SOLO GRAFI ISOMORFI)")
-    print("=" * 110)
+    opt = 'O3'
+    np_val = 4
+    sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
+    
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    
+    x = np.arange(len(sizes))
+    width = 0.35
+    
+    # Tempi
+    ax1 = axes[0]
+    iso_times = [get_mpi_value(mpi_df, s, np_val, 'Time_VF2_s', 'iso', opt) for s in sizes]
+    diff_times = [get_mpi_value(mpi_df, s, np_val, 'Time_VF2_s', 'diff', opt) for s in sizes]
+    
+    ax1.bar(x - width/2, iso_times, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
+    ax1.bar(x + width/2, diff_times, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
+    ax1.set_xlabel('Dimensione Input')
+    ax1.set_ylabel('Tempo (s) - Log')
+    ax1.set_title(f'Tempi MPI ({np_val} proc)')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(sizes)
+    ax1.set_yscale('log')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3, axis='y')
+    
+    # Speedup
+    ax2 = axes[1]
+    iso_speedups = []
+    diff_speedups = []
+    for size in sizes:
+        seq_iso = get_seq_value(seq_df, size, 'Time_VF2_s', 'iso', opt)
+        seq_diff = get_seq_value(seq_df, size, 'Time_VF2_s', 'diff', opt)
+        mpi_iso = get_mpi_value(mpi_df, size, np_val, 'Time_VF2_s', 'iso', opt)
+        mpi_diff = get_mpi_value(mpi_df, size, np_val, 'Time_VF2_s', 'diff', opt)
+        iso_speedups.append(seq_iso / mpi_iso if mpi_iso > 0 else 0)
+        diff_speedups.append(seq_diff / mpi_diff if mpi_diff > 0 else 0)
+    
+    ax2.bar(x - width/2, iso_speedups, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
+    ax2.bar(x + width/2, diff_speedups, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
+    ax2.axhline(y=1, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+    ax2.set_xlabel('Dimensione Input')
+    ax2.set_ylabel('Speedup')
+    ax2.set_title(f'Speedup ({np_val} proc)')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(sizes)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3, axis='y')
+    
+    # Throughput
+    ax3 = axes[2]
+    iso_thr = [get_mpi_value(mpi_df, s, np_val, 'Throughput_MB_s', 'iso', opt) for s in sizes]
+    diff_thr = [get_mpi_value(mpi_df, s, np_val, 'Throughput_MB_s', 'diff', opt) for s in sizes]
+    
+    ax3.bar(x - width/2, iso_thr, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
+    ax3.bar(x + width/2, diff_thr, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
+    ax3.set_xlabel('Dimensione Input')
+    ax3.set_ylabel('Throughput (MB/s)')
+    ax3.set_title(f'Throughput ({np_val} proc)')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(sizes)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    filepath = PLOTS_DIR / "mpi_comparison_iso_vs_diff.png"
+    plt.savefig(filepath, dpi=DPI, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"[GRAFICO] {filepath.name}")
+
+
+def print_comparison_table(seq_df, mpi_df, graph_type='iso'):
+    """Tabella comparativa."""
+    type_label = "ISOMORFI" if graph_type == 'iso' else "NON ISOMORFI"
+    
+    print(f"\n{'='*120}")
+    print(f"CONFRONTO SEQ vs MPI - GRAFI {type_label}")
+    print(f"{'='*120}")
     
     for opt in OPTIMIZERS:
-        print(f"\n{'─'*110}")
+        print(f"\n{'─'*120}")
         print(f"OTTIMIZZATORE: {opt}")
-        print(f"{'─'*110}")
+        print(f"{'─'*120}")
         
-        seq_opt = seq_df[seq_df['Optimizer'] == opt]
-        mpi_opt = mpi_df[mpi_df['Optimizer'] == opt]
+        sizes = [s for s in SIZE_ORDER if s in seq_df['Size'].unique()]
         
-        # Conta misurazioni
-        n_mpi = len(mpi_opt)
-        n_per_size = n_mpi // (len(SIZE_ORDER) * len(PROC_COUNTS)) if n_mpi > 0 else 0
-        print(f"Misurazioni MPI totali: {n_mpi} (~{n_per_size} per configurazione)")
-        
-        print(f"\n{'Size':<8} {'SEQ (s)':>12} {'MPI-2 (s)':>12} {'MPI-4 (s)':>12} {'Speedup-2':>12} {'Speedup-4':>12} {'Eff-4 (%)':>10}")
-        print("-" * 90)
-        
-        sizes = [s for s in SIZE_ORDER if s in seq_opt['Size'].values]
+        print(f"\n{'Size':<8} {'SEQ':>15} {'MPI-2':>15} {'MPI-4':>15} {'Spd-2':>10} {'Spd-4':>10} {'Thr-SEQ':>10} {'Thr-4':>10}")
+        print("-" * 100)
         
         for size in sizes:
-            seq_time = get_mean_time(seq_opt, size)
-            mpi_2_time = get_mean_time(mpi_opt, size, np_val=2)
-            mpi_4_time = get_mean_time(mpi_opt, size, np_val=4)
+            seq_t = get_seq_value(seq_df, size, 'Time_VF2_s', graph_type, opt)
+            mpi_2_t = get_mpi_value(mpi_df, size, 2, 'Time_VF2_s', graph_type, opt)
+            mpi_4_t = get_mpi_value(mpi_df, size, 4, 'Time_VF2_s', graph_type, opt)
             
-            speedup_2 = seq_time / mpi_2_time if mpi_2_time > 0 else 0
-            speedup_4 = seq_time / mpi_4_time if mpi_4_time > 0 else 0
-            eff_4 = (speedup_4 / 4 * 100) if speedup_4 > 0 else 0
+            spd_2 = seq_t / mpi_2_t if mpi_2_t > 0 else 0
+            spd_4 = seq_t / mpi_4_t if mpi_4_t > 0 else 0
             
-            print(f"{size:<8} {seq_time:>12.4f} {mpi_2_time:>12.4f} {mpi_4_time:>12.4f} {speedup_2:>11.2f}x {speedup_4:>11.2f}x {eff_4:>9.1f}%")
+            thr_seq = get_seq_value(seq_df, size, 'Throughput_MB_s', graph_type, opt)
+            thr_4 = get_mpi_value(mpi_df, size, 4, 'Throughput_MB_s', graph_type, opt)
+            
+            print(f"{size:<8} {seq_t:>14.4f}s {mpi_2_t:>14.4f}s {mpi_4_t:>14.4f}s {spd_2:>9.2f}x {spd_4:>9.2f}x {thr_seq:>9.0f} {thr_4:>9.0f}")
     
-    print("\n" + "=" * 110)
+    print(f"\n{'='*120}")
 
 
 # =============================================================================
@@ -456,38 +526,63 @@ def print_comparison_table(seq_df, mpi_df):
 # =============================================================================
 
 def main():
-    print("=" * 60)
-    print("VF2++ - Confronto Sequenziale vs MPI (Solo Isomorfi)")
-    print("=" * 60)
+    print("=" * 70)
+    print("VF2++ - Confronto SEQ vs MPI (Completo)")
+    print("=" * 70)
     print()
     
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    print("Caricamento dati sequenziali...")
+    print("Caricamento dati...")
     seq_df = load_sequential_results()
-    
-    print("\nCaricamento dati MPI...")
     mpi_df = load_mpi_results()
     
     if seq_df is None or seq_df.empty:
-        print("\n[ERRORE] Nessun dato sequenziale trovato!")
+        print("\n[ERRORE] Nessun dato sequenziale!")
         return
     
     if mpi_df is None or mpi_df.empty:
-        print("\n[ERRORE] Nessun dato MPI trovato!")
+        print("\n[ERRORE] Nessun dato MPI!")
         return
     
-    print(f"\nDati caricati: SEQ={len(seq_df)} righe, MPI={len(mpi_df)} righe")
+    print(f"\nDati: SEQ={len(seq_df)}, MPI={len(mpi_df)}")
     
-    print("\n--- Generazione grafici ---")
-    plot_time_comparison(seq_df, mpi_df)
-    plot_speedup_curves(seq_df, mpi_df)
-    plot_efficiency(seq_df, mpi_df)
-    plot_overhead(seq_df, mpi_df)
-    plot_summary_all_optimizers(seq_df, mpi_df)
+    # GRAFICI ISOMORFI
+    print("\n" + "-" * 70)
+    print("GENERAZIONE GRAFICI - GRAFI ISOMORFI")
+    print("-" * 70)
     
-    print_comparison_table(seq_df, mpi_df)
+    plot_time_comparison(seq_df, mpi_df, 'iso')
+    plot_speedup_curves(seq_df, mpi_df, 'iso')
+    plot_efficiency(seq_df, mpi_df, 'iso')
+    plot_overhead(seq_df, mpi_df, 'iso')
+    plot_throughput_comparison(seq_df, mpi_df, 'iso')
+    plot_summary_all_optimizers(seq_df, mpi_df, 'iso')
+    print_comparison_table(seq_df, mpi_df, 'iso')
     
+    # GRAFICI NON ISOMORFI
+    print("\n" + "-" * 70)
+    print("GENERAZIONE GRAFICI - GRAFI NON ISOMORFI")
+    print("-" * 70)
+    
+    plot_time_comparison(seq_df, mpi_df, 'diff')
+    plot_speedup_curves(seq_df, mpi_df, 'diff')
+    plot_efficiency(seq_df, mpi_df, 'diff')
+    plot_overhead(seq_df, mpi_df, 'diff')
+    plot_throughput_comparison(seq_df, mpi_df, 'diff')
+    plot_summary_all_optimizers(seq_df, mpi_df, 'diff')
+    print_comparison_table(seq_df, mpi_df, 'diff')
+    
+    # CONFRONTO ISO vs DIFF
+    print("\n" + "-" * 70)
+    print("CONFRONTO ISO vs DIFF")
+    print("-" * 70)
+    
+    plot_iso_vs_diff(seq_df, mpi_df)
+    
+    print(f"\n{'='*70}")
+    print("COMPLETATO!")
+    print(f"{'='*70}")
     print(f"\nGrafici salvati in: {PLOTS_DIR}")
 
 

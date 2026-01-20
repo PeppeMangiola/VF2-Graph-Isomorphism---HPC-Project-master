@@ -1,13 +1,12 @@
 #!/bin/bash
 
 # ==================================================================
-# SCRIPT BENCHMARK MPI - VF2++
+# SCRIPT BENCHMARK MPI - VF2++ (Versione Completa)
 # ==================================================================
 # Esegue benchmark MPI per tutti gli ottimizzatori (O0-O3)
-# Calcola speedup rispetto alla versione sequenziale
+# Calcola speedup, efficienza, overhead e throughput
 # 
 # MODALITÀ APPEND: i nuovi risultati vengono aggiunti ai CSV esistenti
-#                  se il file non esiste, viene creato con header
 #
 # REQUISITI:
 #   - Eseguibili MPI compilati (make mpi)
@@ -41,6 +40,7 @@ echo "Input:       $INPUT_DIR"
 echo "SEQ Results: $SEQ_OUTPUT_DIR"
 echo "MPI Output:  $MPI_OUTPUT_DIR"
 echo "Processi:    ${PROC_COUNTS[*]}"
+echo "Tipi:        ${TYPES[*]}"
 echo "Modalità:    APPEND (preserva risultati precedenti)"
 echo "=========================================="
 echo ""
@@ -52,7 +52,6 @@ if [ ! -d "$SEQ_OUTPUT_DIR" ]; then
     exit 1
 fi
 
-# Verifica che esistano i CSV sequenziali
 SEQ_CSV_COUNT=$(ls -1 "$SEQ_OUTPUT_DIR"/results_O*.csv 2>/dev/null | wc -l)
 if [ "$SEQ_CSV_COUNT" -eq 0 ]; then
     echo "[ERRORE] Nessun file results_O*.csv trovato in $SEQ_OUTPUT_DIR"
@@ -80,24 +79,8 @@ get_seq_time() {
         return
     fi
     
-    # Mappa size+type a numero riga (1-based, +1 per header)
-    local row=0
-    case "${size}_${type}" in
-        "1MB_iso")   row=2 ;;
-        "1MB_diff")  row=3 ;;
-        "50MB_iso")  row=4 ;;
-        "50MB_diff") row=5 ;;
-        "100MB_iso")  row=6 ;;
-        "100MB_diff") row=7 ;;
-        "200MB_iso")  row=8 ;;
-        "200MB_diff") row=9 ;;
-        "500MB_iso")  row=10 ;;
-        "500MB_diff") row=11 ;;
-        *) echo "0"; return ;;
-    esac
-    
-    # Estrai Time_VF2_s (colonna 4) dalla riga corretta, rimuovi \r
-    local time=$(sed -n "${row}p" "$csv_file" | tr -d '\r' | cut -d',' -f4)
+    # Cerca la riga corrispondente nel CSV
+    local time=$(grep "^${size},${type}," "$csv_file" | head -1 | cut -d',' -f7 | tr -d '\r')
     
     if [ -z "$time" ] || [ "$time" = "" ]; then
         echo "0"
@@ -106,26 +89,18 @@ get_seq_time() {
     fi
 }
 
-# Funzione per pulire valori da \r e spazi
-clean_value() {
-    echo "$1" | tr -d '\r\n ' 
-}
-
-# Funzione per creare header CSV se il file non esiste o è vuoto
+# Funzione per creare header CSV
 ensure_csv_header() {
     local csv_file=$1
-    local header="Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead"
+    local header="Size,Type,Nodes,Edges,RAM_MB,NumProcs,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead,Throughput_MB_s"
     
     if [ ! -f "$csv_file" ]; then
-        # File non esiste: crea con header
         echo "$header" > "$csv_file"
         echo "[INFO] Creato nuovo file CSV: $csv_file"
     elif [ ! -s "$csv_file" ]; then
-        # File esiste ma è vuoto: aggiungi header
         echo "$header" > "$csv_file"
         echo "[INFO] Aggiunto header a file CSV vuoto: $csv_file"
     fi
-    # Se il file esiste e non è vuoto, non fare nulla (append)
 }
 
 # 7. Benchmark per ogni ottimizzatore
@@ -150,10 +125,7 @@ for OPT in "${OPTIMIZERS[@]}"; do
     echo "OTTIMIZZATORE: $OPT"
     echo "=========================================="
     
-    # File CSV output per questo ottimizzatore
     CSV_FILE="$MPI_OUTPUT_DIR/results_${OPT}.csv"
-    
-    # Assicura che il file abbia l'header (crea se non esiste, append se esiste)
     ensure_csv_header "$CSV_FILE"
     
     for SIZE in "${SIZES[@]}"; do
@@ -167,7 +139,7 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 continue
             fi
             
-            # Leggi info grafo (prima riga: nodes edges) - pulisci \r
+            # Leggi info grafo
             FIRST_LINE=$(head -1 "$G1" | tr -d '\r')
             NODES=$(echo "$FIRST_LINE" | awk '{print $1}')
             EDGES=$(echo "$FIRST_LINE" | awk '{print $2}')
@@ -178,16 +150,15 @@ for OPT in "${OPTIMIZERS[@]}"; do
             for NP in "${PROC_COUNTS[@]}"; do
                 echo -n "  [RUN] $OPT | np=$NP | $SIZE $TYPE ... "
                 
-                # Esegui MPI e cattura output
                 OUTPUT=$(mpirun --oversubscribe -np "$NP" "$EXE" "$G1" "$G2" 0 2>&1)
                 
-                # Estrai metriche dall'output - pulisci ogni valore
+                # Estrai metriche
                 TIME_LOAD=$(echo "$OUTPUT" | grep "Tempo caricamento:" | awk '{print $3}' | tr -d 's\r\n')
                 TIME_VF2=$(echo "$OUTPUT" | grep "Tempo VF2++ MPI:" | awk '{print $4}' | tr -d 's\r\n')
                 TIME_TOTAL=$(echo "$OUTPUT" | grep "Tempo totale:" | awk '{print $3}' | tr -d 's\r\n')
                 RAM_MB=$(echo "$OUTPUT" | grep "RAM Totale Grafi:" | awk '{print $4}' | tr -d '\r\n')
                 
-                # Default se parsing fallisce
+                # Default
                 [ -z "$TIME_LOAD" ] && TIME_LOAD="0"
                 [ -z "$TIME_VF2" ] && TIME_VF2="0"
                 [ -z "$TIME_TOTAL" ] && TIME_TOTAL="0"
@@ -197,33 +168,42 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 SPEEDUP="0"
                 EFFICIENCY="0"
                 OVERHEAD="0"
+                THROUGHPUT="0"
                 
-                if [ "$TIME_VF2" != "0" ] && [ "$SEQ_TIME" != "0" ]; then
-                    SPEEDUP=$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)
-                    [ -z "$SPEEDUP" ] && SPEEDUP="0"
+                if [ "$TIME_VF2" != "0" ]; then
+                    # Throughput MB/s
+                    if [ "$RAM_MB" != "0" ]; then
+                        THROUGHPUT=$(echo "scale=4; $RAM_MB / $TIME_VF2" | bc 2>/dev/null)
+                        [ -z "$THROUGHPUT" ] && THROUGHPUT="0"
+                    fi
                     
-                    EFFICIENCY=$(echo "scale=2; $SPEEDUP / $NP * 100" | bc 2>/dev/null)
-                    [ -z "$EFFICIENCY" ] && EFFICIENCY="0"
-                    
-                    OVERHEAD=$(echo "scale=6; $TIME_VF2 * $NP - $SEQ_TIME" | bc 2>/dev/null)
-                    [ -z "$OVERHEAD" ] && OVERHEAD="0"
+                    # Speedup, Efficienza, Overhead
+                    if [ "$SEQ_TIME" != "0" ]; then
+                        SPEEDUP=$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)
+                        [ -z "$SPEEDUP" ] && SPEEDUP="0"
+                        
+                        EFFICIENCY=$(echo "scale=2; $SPEEDUP / $NP * 100" | bc 2>/dev/null)
+                        [ -z "$EFFICIENCY" ] && EFFICIENCY="0"
+                        
+                        OVERHEAD=$(echo "scale=6; $TIME_VF2 * $NP - $SEQ_TIME" | bc 2>/dev/null)
+                        [ -z "$OVERHEAD" ] && OVERHEAD="0"
+                    fi
                 fi
                 
-                # APPEND: Scrivi riga CSV
-                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+                # Scrivi riga CSV
+                printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
                     "$SIZE" "$TYPE" "$NODES" "$EDGES" "$RAM_MB" "$NP" \
                     "$TIME_LOAD" "$TIME_VF2" "$TIME_TOTAL" "$SEQ_TIME" \
-                    "$SPEEDUP" "$EFFICIENCY" "$OVERHEAD" >> "$CSV_FILE"
+                    "$SPEEDUP" "$EFFICIENCY" "$OVERHEAD" "$THROUGHPUT" >> "$CSV_FILE"
                 
-                echo "done (VF2++: ${TIME_VF2}s, Speedup: ${SPEEDUP}x, Eff: ${EFFICIENCY}%)"
+                echo "done (T: ${TIME_VF2}s, S: ${SPEEDUP}x, Thr: ${THROUGHPUT} MB/s)"
             done
         done
     done
     
-    # Conta righe nel CSV (escluso header)
     ROW_COUNT=$(($(wc -l < "$CSV_FILE") - 1))
     echo ""
-    echo "[OK] Risultati aggiunti a: $CSV_FILE (totale: $ROW_COUNT righe)"
+    echo "[OK] Risultati: $CSV_FILE ($ROW_COUNT righe)"
     echo ""
 done
 
@@ -231,10 +211,8 @@ echo "=========================================="
 echo "BENCHMARK MPI COMPLETATO"
 echo "=========================================="
 echo ""
-echo "File aggiornati in: $MPI_OUTPUT_DIR"
+echo "File in: $MPI_OUTPUT_DIR"
 ls -la "$MPI_OUTPUT_DIR"/*.csv 2>/dev/null
-echo ""
-echo "Nota: I nuovi risultati sono stati AGGIUNTI ai file esistenti"
 echo ""
 echo "Prossimi passi:"
 echo "  - Confronto ottimizzatori: python mpi/scripts/plot_mpi_optimizers.py"
