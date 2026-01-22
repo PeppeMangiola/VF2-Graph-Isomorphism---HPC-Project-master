@@ -89,6 +89,20 @@ get_seq_time() {
     fi
 }
 
+# Funzione per formattare numeri decimali (aggiunge 0 se inizia con .)
+format_decimal() {
+    local num=$1
+    # Se inizia con . aggiunge 0
+    if [[ "$num" == .* ]]; then
+        echo "0$num"
+    # Se inizia con -. aggiunge 0 dopo il -
+    elif [[ "$num" == -.* ]]; then
+        echo "-0${num:1}"
+    else
+        echo "$num"
+    fi
+}
+
 # Funzione per creare header CSV
 ensure_csv_header() {
     local csv_file=$1
@@ -173,19 +187,19 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 if [ "$TIME_VF2" != "0" ]; then
                     # Throughput MB/s
                     if [ "$RAM_MB" != "0" ]; then
-                        THROUGHPUT=$(echo "scale=4; $RAM_MB / $TIME_VF2" | bc 2>/dev/null)
+                        THROUGHPUT=$(format_decimal "$(echo "scale=4; $RAM_MB / $TIME_VF2" | bc 2>/dev/null)")
                         [ -z "$THROUGHPUT" ] && THROUGHPUT="0"
                     fi
                     
                     # Speedup, Efficienza, Overhead
                     if [ "$SEQ_TIME" != "0" ]; then
-                        SPEEDUP=$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)
+                        SPEEDUP=$(format_decimal "$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)")
                         [ -z "$SPEEDUP" ] && SPEEDUP="0"
                         
-                        EFFICIENCY=$(echo "scale=2; $SPEEDUP / $NP * 100" | bc 2>/dev/null)
+                        EFFICIENCY=$(format_decimal "$(echo "scale=2; $SPEEDUP / $NP * 100" | bc 2>/dev/null)")
                         [ -z "$EFFICIENCY" ] && EFFICIENCY="0"
                         
-                        OVERHEAD=$(echo "scale=6; $TIME_VF2 * $NP - $SEQ_TIME" | bc 2>/dev/null)
+                        OVERHEAD=$(format_decimal "$(echo "scale=6; $TIME_VF2 * $NP - $SEQ_TIME" | bc 2>/dev/null)")
                         [ -z "$OVERHEAD" ] && OVERHEAD="0"
                     fi
                 fi
