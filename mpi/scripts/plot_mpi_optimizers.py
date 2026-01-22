@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ==================================================================
-VF2++ MPI - Confronto tra Ottimizzatori (Versione Completa)
+VF2++ MPI - Confronto tra Ottimizzatori (Versione Corretta)
 ==================================================================
 
 Genera grafici che confrontano le performance MPI tra i diversi
@@ -18,6 +18,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+import warnings
+warnings.filterwarnings('ignore')
 
 # =============================================================================
 # CONFIGURAZIONE
@@ -42,6 +44,19 @@ DPI = 150
 # FUNZIONI
 # =============================================================================
 
+def fix_decimal_values(df):
+    """Corregge valori decimali che iniziano con . (es. .7585 -> 0.7585)"""
+    for col in df.columns:
+        if df[col].dtype == object:
+            try:
+                df[col] = df[col].apply(lambda x: f"0{x}" if isinstance(x, str) and x.startswith('.') else 
+                                        (f"-0{x[1:]}" if isinstance(x, str) and x.startswith('-.') else x))
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+            except:
+                pass
+    return df
+
+
 def load_all_results():
     """Carica tutti i CSV dei risultati MPI."""
     all_data = []
@@ -51,6 +66,7 @@ def load_all_results():
         if csv_path.exists():
             try:
                 df = pd.read_csv(csv_path)
+                df = fix_decimal_values(df)
                 df['Optimizer'] = opt
                 
                 # Calcola Throughput se non presente
@@ -74,9 +90,9 @@ def load_all_results():
 def get_mean_value(df, size, np_val, column):
     """Ottiene il valore medio per una data configurazione."""
     subset = df[(df['Size'] == size) & (df['NumProcs'] == np_val)]
-    values = subset[column].values
-    if len(values) > 0:
-        return np.mean(values)
+    if not subset.empty and column in subset.columns:
+        val = subset[column].mean()
+        return val if pd.notna(val) else 0
     return 0
 
 
@@ -102,6 +118,10 @@ def plot_time_comparison_by_procs(df, graph_type='iso'):
             continue
         
         sizes = [s for s in SIZE_ORDER if s in data['Size'].unique()]
+        if not sizes:
+            plt.close()
+            continue
+            
         x = np.arange(len(sizes))
         width = 0.2
         
@@ -139,11 +159,16 @@ def plot_speedup_by_optimizer(df, graph_type='iso'):
     
     df_filtered = df[df['Type'] == graph_type]
     if df_filtered.empty:
+        print(f"[SKIP] Nessun dato speedup per grafi {type_label}")
         return
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
     sizes = [s for s in SIZE_ORDER if s in df_filtered['Size'].unique()]
+    if not sizes:
+        plt.close()
+        return
+        
     x = np.arange(len(sizes))
     width = 0.1
     
@@ -191,11 +216,16 @@ def plot_efficiency_by_optimizer(df, graph_type='iso'):
     
     df_filtered = df[df['Type'] == graph_type]
     if df_filtered.empty:
+        print(f"[SKIP] Nessun dato efficienza per grafi {type_label}")
         return
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
     sizes = [s for s in SIZE_ORDER if s in df_filtered['Size'].unique()]
+    if not sizes:
+        plt.close()
+        return
+        
     x = np.arange(len(sizes))
     width = 0.1
     
@@ -242,11 +272,16 @@ def plot_overhead_by_optimizer(df, graph_type='iso'):
     
     df_filtered = df[df['Type'] == graph_type]
     if df_filtered.empty:
+        print(f"[SKIP] Nessun dato overhead per grafi {type_label}")
         return
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
     sizes = [s for s in SIZE_ORDER if s in df_filtered['Size'].unique()]
+    if not sizes:
+        plt.close()
+        return
+        
     x = np.arange(len(sizes))
     width = 0.1
     
@@ -291,11 +326,16 @@ def plot_throughput_by_optimizer(df, graph_type='iso'):
     
     df_filtered = df[df['Type'] == graph_type]
     if df_filtered.empty:
+        print(f"[SKIP] Nessun dato throughput per grafi {type_label}")
         return
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
     sizes = [s for s in SIZE_ORDER if s in df_filtered['Size'].unique()]
+    if not sizes:
+        plt.close()
+        return
+        
     x = np.arange(len(sizes))
     width = 0.1
     
@@ -337,6 +377,10 @@ def plot_iso_vs_diff_comparison(df):
     print("\n[PLOT] Confronto ISO vs DIFF...")
     
     sizes = [s for s in SIZE_ORDER if s in df['Size'].unique()]
+    if not sizes:
+        print("[SKIP] Nessun dato per confronto ISO vs DIFF")
+        return
+        
     np_val = 4 if 4 in df['NumProcs'].unique() else 2
     
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
@@ -346,8 +390,13 @@ def plot_iso_vs_diff_comparison(df):
     
     # Tempi
     ax1 = axes[0]
-    iso_times = [df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Time_VF2_s'].mean() for s in sizes]
-    diff_times = [df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Time_VF2_s'].mean() for s in sizes]
+    iso_times = []
+    diff_times = []
+    for s in sizes:
+        iso_val = df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Time_VF2_s'].mean()
+        diff_val = df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Time_VF2_s'].mean()
+        iso_times.append(iso_val if pd.notna(iso_val) else 0.001)
+        diff_times.append(diff_val if pd.notna(diff_val) else 0.001)
     
     ax1.bar(x - width/2, iso_times, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
     ax1.bar(x + width/2, diff_times, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
@@ -362,8 +411,13 @@ def plot_iso_vs_diff_comparison(df):
     
     # Speedup
     ax2 = axes[1]
-    iso_speedups = [df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Speedup'].mean() for s in sizes]
-    diff_speedups = [df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Speedup'].mean() for s in sizes]
+    iso_speedups = []
+    diff_speedups = []
+    for s in sizes:
+        iso_val = df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Speedup'].mean()
+        diff_val = df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Speedup'].mean()
+        iso_speedups.append(iso_val if pd.notna(iso_val) else 0)
+        diff_speedups.append(diff_val if pd.notna(diff_val) else 0)
     
     ax2.bar(x - width/2, iso_speedups, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
     ax2.bar(x + width/2, diff_speedups, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
@@ -378,8 +432,13 @@ def plot_iso_vs_diff_comparison(df):
     
     # Throughput
     ax3 = axes[2]
-    iso_thr = [df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Throughput_MB_s'].mean() for s in sizes]
-    diff_thr = [df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Throughput_MB_s'].mean() for s in sizes]
+    iso_thr = []
+    diff_thr = []
+    for s in sizes:
+        iso_val = df[(df['Type'] == 'iso') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Throughput_MB_s'].mean()
+        diff_val = df[(df['Type'] == 'diff') & (df['Size'] == s) & (df['NumProcs'] == np_val)]['Throughput_MB_s'].mean()
+        iso_thr.append(iso_val if pd.notna(iso_val) else 0)
+        diff_thr.append(diff_val if pd.notna(diff_val) else 0)
     
     ax3.bar(x - width/2, iso_thr, width, label='Isomorfi', color=COLOR_ISO, alpha=0.8)
     ax3.bar(x + width/2, diff_thr, width, label='Non Isomorfi', color=COLOR_DIFF, alpha=0.8)
@@ -437,7 +496,7 @@ def print_summary_table(df, graph_type='iso'):
                 t = get_mean_value(opt_data, size, np_val, 'Time_VF2_s')
                 s = get_mean_value(opt_data, size, np_val, 'Speedup')
                 thr = get_mean_value(opt_data, size, np_val, 'Throughput_MB_s')
-                print(f"{t:.2f}/{s:.1f}x/{thr:.0f}", end="  ")
+                print(f"{t:.2f}/{s:.2f}x/{thr:.0f}", end=" ")
             print()
     
     print("=" * 100)
@@ -464,6 +523,7 @@ def main():
     
     print(f"\nTotale righe: {len(df)}")
     print(f"Tipi: {df['Type'].unique()}")
+    print(f"Colonne: {list(df.columns)}")
     
     # GRAFICI ISOMORFI
     print("\n" + "-" * 70)

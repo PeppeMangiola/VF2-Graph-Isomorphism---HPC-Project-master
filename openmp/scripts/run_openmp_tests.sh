@@ -6,8 +6,6 @@
 # Esegue benchmark OpenMP per tutti gli ottimizzatori (O0-O3)
 # Calcola speedup, efficienza, overhead e throughput
 # 
-# MODALITÀ APPEND: i nuovi risultati vengono aggiunti ai CSV esistenti
-#
 # REQUISITI:
 #   - Eseguibili OpenMP compilati (make openmp)
 #   - Risultati sequenziali in sequential/output/results_O*.csv
@@ -28,7 +26,7 @@ OMP_OUTPUT_DIR="$PROJECT_ROOT/openmp/output"
 
 # 2. Configurazione
 SIZES=("1MB" "50MB" "100MB" "200MB" "500MB")
-OPTIMIZERS=("O0" "O1" "O2" "O3")
+OPTIMIZERS=("O0 O1 O2 O3")
 TYPES=("iso" "diff")
 THREAD_COUNTS=(1 2 4)
 
@@ -40,34 +38,21 @@ echo "Input:       $INPUT_DIR"
 echo "SEQ Results: $SEQ_OUTPUT_DIR"
 echo "OMP Output:  $OMP_OUTPUT_DIR"
 echo "Thread:      ${THREAD_COUNTS[*]}"
-echo "Tipi:        ${TYPES[*]}"
-echo "Modalità:    APPEND (preserva risultati precedenti)"
 echo "=========================================="
 echo ""
 
 # 3. Verifica prerequisiti
 if [ ! -d "$SEQ_OUTPUT_DIR" ]; then
     echo "[ERRORE] Directory risultati sequenziali non trovata: $SEQ_OUTPUT_DIR"
-    echo "         Esegui prima: make benchmark_seq"
     exit 1
 fi
-
-SEQ_CSV_COUNT=$(ls -1 "$SEQ_OUTPUT_DIR"/results_O*.csv 2>/dev/null | wc -l)
-if [ "$SEQ_CSV_COUNT" -eq 0 ]; then
-    echo "[ERRORE] Nessun file results_O*.csv trovato in $SEQ_OUTPUT_DIR"
-    echo "         Esegui prima: make benchmark_seq"
-    exit 1
-fi
-
-echo "[OK] Trovati $SEQ_CSV_COUNT file CSV sequenziali"
 
 # 4. Crea directory output
 mkdir -p "$OMP_OUTPUT_DIR"
 
-# 5. Ci posizioniamo nella ROOT del progetto
-cd "$PROJECT_ROOT" || { echo "ERRORE: Impossibile andare in $PROJECT_ROOT"; exit 1; }
+cd "$PROJECT_ROOT" || exit 1
 
-# 6. Funzione per leggere tempo sequenziale dal CSV
+# 5. Funzione per leggere tempo sequenziale dal CSV
 get_seq_time() {
     local opt=$1
     local size=$2
@@ -79,8 +64,6 @@ get_seq_time() {
         return
     fi
     
-    # Cerca la riga corrispondente nel CSV
-    # Header: Size,Type,Nodes,Edges,RAM_Graph_MB,Time_Load_s,Time_VF2_s,...
     local time=$(grep "^${size},${type}," "$csv_file" | head -1 | cut -d',' -f7 | tr -d '\r')
     
     if [ -z "$time" ] || [ "$time" = "" ]; then
@@ -90,35 +73,43 @@ get_seq_time() {
     fi
 }
 
-# Funzione per creare header CSV se il file non esiste o è vuoto
+# Funzione per formattare numeri decimali (aggiunge 0 se inizia con .)
+format_decimal() {
+    local num=$1
+    if [[ "$num" == .* ]]; then
+        echo "0$num"
+    elif [[ "$num" == -.* ]]; then
+        echo "-0${num:1}"
+    else
+        echo "$num"
+    fi
+}
+
+# Funzione per creare header CSV
 ensure_csv_header() {
     local csv_file=$1
     local header="Size,Type,Nodes,Edges,RAM_MB,NumThreads,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Efficiency,Overhead,Throughput_MB_s"
     
     if [ ! -f "$csv_file" ]; then
         echo "$header" > "$csv_file"
-        echo "[INFO] Creato nuovo file CSV: $csv_file"
     elif [ ! -s "$csv_file" ]; then
         echo "$header" > "$csv_file"
-        echo "[INFO] Aggiunto header a file CSV vuoto: $csv_file"
     fi
 }
 
-# 7. Benchmark per ogni ottimizzatore
-echo ""
+# 6. Benchmark per ogni ottimizzatore
 echo "Inizio benchmark OpenMP..."
 echo ""
 
 for OPT in "${OPTIMIZERS[@]}"; do
     
-    # Trova eseguibile OpenMP
     EXE="$BUILD_DIR/vf2pp_openmp_${OPT}"
     if [ -f "$EXE.exe" ]; then
         EXE="$EXE.exe"
     fi
     
     if [ ! -f "$EXE" ]; then
-        echo "[SKIP] Eseguibile OpenMP non trovato: vf2pp_openmp_${OPT}"
+        echo "[SKIP] Eseguibile non trovato: vf2pp_openmp_${OPT}"
         continue
     fi
     
@@ -140,12 +131,10 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 continue
             fi
             
-            # Leggi info grafo
             FIRST_LINE=$(head -1 "$G1" | tr -d '\r')
             NODES=$(echo "$FIRST_LINE" | awk '{print $1}')
             EDGES=$(echo "$FIRST_LINE" | awk '{print $2}')
             
-            # Leggi tempo sequenziale
             SEQ_TIME=$(get_seq_time "$OPT" "$SIZE" "$TYPE")
             
             for NT in "${THREAD_COUNTS[@]}"; do
@@ -154,58 +143,51 @@ for OPT in "${OPTIMIZERS[@]}"; do
                 export OMP_NUM_THREADS=$NT
                 OUTPUT=$("$EXE" "$G1" "$G2" 0 2>&1)
                 
-                # Estrai metriche
                 TIME_LOAD=$(echo "$OUTPUT" | grep "Tempo caricamento:" | awk '{print $3}' | tr -d 's\r\n')
                 TIME_VF2=$(echo "$OUTPUT" | grep "Tempo VF2++ OpenMP:" | awk '{print $4}' | tr -d 's\r\n')
                 TIME_TOTAL=$(echo "$OUTPUT" | grep "Tempo totale:" | awk '{print $3}' | tr -d 's\r\n')
                 RAM_MB=$(echo "$OUTPUT" | grep "RAM Totale Grafi:" | awk '{print $4}' | tr -d '\r\n')
                 
-                # Default
                 [ -z "$TIME_LOAD" ] && TIME_LOAD="0"
                 [ -z "$TIME_VF2" ] && TIME_VF2="0"
                 [ -z "$TIME_TOTAL" ] && TIME_TOTAL="0"
                 [ -z "$RAM_MB" ] && RAM_MB="0"
                 
-                # Calcola metriche
                 SPEEDUP="0"
                 EFFICIENCY="0"
                 OVERHEAD="0"
                 THROUGHPUT="0"
                 
                 if [ "$TIME_VF2" != "0" ]; then
-                    # Throughput MB/s
                     if [ "$RAM_MB" != "0" ]; then
-                        THROUGHPUT=$(echo "scale=4; $RAM_MB / $TIME_VF2" | bc 2>/dev/null)
+                        THROUGHPUT=$(format_decimal "$(echo "scale=4; $RAM_MB / $TIME_VF2" | bc 2>/dev/null)")
                         [ -z "$THROUGHPUT" ] && THROUGHPUT="0"
                     fi
                     
-                    # Speedup, Efficienza, Overhead (solo se abbiamo tempo SEQ)
                     if [ "$SEQ_TIME" != "0" ]; then
-                        SPEEDUP=$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)
+                        SPEEDUP=$(format_decimal "$(echo "scale=4; $SEQ_TIME / $TIME_VF2" | bc 2>/dev/null)")
                         [ -z "$SPEEDUP" ] && SPEEDUP="0"
                         
-                        EFFICIENCY=$(echo "scale=2; $SPEEDUP / $NT * 100" | bc 2>/dev/null)
+                        EFFICIENCY=$(format_decimal "$(echo "scale=2; $SPEEDUP / $NT * 100" | bc 2>/dev/null)")
                         [ -z "$EFFICIENCY" ] && EFFICIENCY="0"
                         
-                        OVERHEAD=$(echo "scale=6; $TIME_VF2 * $NT - $SEQ_TIME" | bc 2>/dev/null)
+                        OVERHEAD=$(format_decimal "$(echo "scale=6; $TIME_VF2 * $NT - $SEQ_TIME" | bc 2>/dev/null)")
                         [ -z "$OVERHEAD" ] && OVERHEAD="0"
                     fi
                 fi
                 
-                # Scrivi riga CSV
                 printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
                     "$SIZE" "$TYPE" "$NODES" "$EDGES" "$RAM_MB" "$NT" \
                     "$TIME_LOAD" "$TIME_VF2" "$TIME_TOTAL" "$SEQ_TIME" \
                     "$SPEEDUP" "$EFFICIENCY" "$OVERHEAD" "$THROUGHPUT" >> "$CSV_FILE"
                 
-                echo "done (T: ${TIME_VF2}s, S: ${SPEEDUP}x, Thr: ${THROUGHPUT} MB/s)"
+                echo "done (T: ${TIME_VF2}s, S: ${SPEEDUP}x)"
             done
         done
     done
     
-    ROW_COUNT=$(($(wc -l < "$CSV_FILE") - 1))
     echo ""
-    echo "[OK] Risultati: $CSV_FILE ($ROW_COUNT righe)"
+    echo "[OK] Risultati: $CSV_FILE"
     echo ""
 done
 
@@ -213,9 +195,6 @@ echo "=========================================="
 echo "BENCHMARK OPENMP COMPLETATO"
 echo "=========================================="
 echo ""
-echo "File in: $OMP_OUTPUT_DIR"
-ls -la "$OMP_OUTPUT_DIR"/*.csv 2>/dev/null
-echo ""
 echo "Prossimi passi:"
-echo "  - Grafici: python openmp/scripts/plot_openmp_results.py"
+echo "  python openmp/scripts/plot_openmp_results.py"
 echo ""
