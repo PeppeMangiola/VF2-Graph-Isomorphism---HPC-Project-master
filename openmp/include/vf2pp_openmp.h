@@ -9,17 +9,11 @@
  * STRATEGIA DI PARALLELIZZAZIONE:
  * ================================
  * L'algoritmo VF2++ è basato su backtracking, che è intrinsecamente sequenziale.
- * La parallelizzazione OpenMP avviene a DUE LIVELLI:
+ * La parallelizzazione OpenMP avviene al primo livello dell'albero di ricerca:
  * 
- * 1. PARALLELISMO AL PRIMO LIVELLO DELL'ALBERO DI RICERCA:
- *    - I candidati iniziali per il primo nodo vengono distribuiti tra i thread
- *    - Ogni thread esplora INDIPENDENTEMENTE i sottoalberi assegnati
- *    - Early termination: quando un thread trova soluzione, gli altri si fermano
- * 
- * 2. PARALLELISMO A LIVELLO DI BATCH (opzionale):
- *    - Multiple coppie di grafi vengono processate in parallelo
- *    - Ogni thread elabora un sottoinsieme delle coppie
- *    - Approccio task-based per bilanciamento dinamico
+ * - I candidati iniziali per il primo nodo vengono distribuiti tra i thread
+ * - Ogni thread esplora INDIPENDENTEMENTE i sottoalberi assegnati
+ * - Early termination: quando un thread trova soluzione, gli altri si fermano
  * 
  * SINCRONIZZAZIONE:
  * - Variabile shared "found" per early termination
@@ -78,11 +72,6 @@ typedef struct {
  * @param g1 Primo grafo (pattern)
  * @param g2 Secondo grafo (target)
  * @return true se isomorfi, false altrimenti
- * 
- * THREAD SAFETY:
- * - I grafi g1 e g2 vengono COPIATI internamente per ogni thread
- * - Le strutture originali NON vengono modificate
- * - Safe per chiamate concorrenti
  */
 bool vf2pp_is_isomorphic_openmp(Graph* g1, Graph* g2);
 
@@ -115,39 +104,6 @@ VF2OpenMPResult vf2pp_find_isomorphism_openmp(Graph* g1, Graph* g2,
  * @param result Puntatore al risultato da liberare
  */
 void vf2_openmp_result_free(VF2OpenMPResult* result);
-
-/* ============================================================================
- * FUNZIONI BATCH MODE
- * ============================================================================ */
-
-/**
- * Risultato per una singola coppia in batch mode
- */
-typedef struct {
-    int     pair_id;            /* ID della coppia */
-    bool    is_isomorphic;      /* risultato */
-    double  time_load;          /* tempo caricamento */
-    double  time_algo;          /* tempo algoritmo */
-    double  time_total;         /* tempo totale */
-    double  ram_mb;             /* RAM usata */
-    int     num_nodes;          /* nodi */
-    int     num_edges;          /* archi */
-} VF2BatchResult;
-
-/**
- * Processa multiple coppie di grafi in parallelo.
- * Distribuzione task-based con bilanciamento dinamico.
- * 
- * @param g1_paths Array di path ai grafi G1
- * @param g2_paths Array di path ai grafi G2
- * @param num_pairs Numero di coppie
- * @param results Array output per i risultati (pre-allocato)
- * @param num_threads Numero di thread (0 = default)
- * @return 0 se successo, -1 se errore
- */
-int vf2pp_batch_openmp(const char** g1_paths, const char** g2_paths,
-                       int num_pairs, VF2BatchResult* results,
-                       int num_threads);
 
 /* ============================================================================
  * UTILITY

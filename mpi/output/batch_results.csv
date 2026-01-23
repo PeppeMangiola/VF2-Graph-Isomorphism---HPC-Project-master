@@ -1,4 +1,0 @@
-Mode,NumProcs,NumPairs,TotalTime_s,AvgTime_s,Throughput,Speedup,Efficiency
-SEQ,1,100,33.6033,.336033,2.98,1.0000,100.00
-MPI,2,100,13.0263,.130263,7.68,2.5796,128.00
-MPI,4,100,8.5494,.085494,11.70,3.9304,98.00

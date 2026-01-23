@@ -1,9 +1,11 @@
 /*
- * VF2++ Graph Isomorphism - OpenMP Parallel Implementation (GOLD VERSION)
- * * CARATTERISTICHE:
- * 1. Zero-Malloc Core: Massima efficienza di memoria (Speedup > 1.0x su 1 thread).
- * 2. Logic Clean: Nessun overhead inutile (niente shuffle, niente guided complessi).
- * 3. Fixed: Compila perfettamente con il Main e Header.
+ * VF2++ Graph Isomorphism - OpenMP Parallel Implementation
+ * HPC Project
+ * 
+ * CARATTERISTICHE:
+ * 1. Zero-Malloc Core: Massima efficienza di memoria
+ * 2. Logic Clean: Nessun overhead inutile
+ * 3. Early Termination: Quando un thread trova soluzione, gli altri si fermano
  */
 
 #include "vf2pp_openmp.h"
@@ -16,8 +18,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <omp.h>
-#include <dirent.h>       
-#include <sys/stat.h>     
 
 /* ============================================================================
  * FUNZIONI HELPER INTERNE (Statiche)
@@ -62,7 +62,7 @@ static void omp_restore_t2_tilde(const Graph* g2, int unmapped_node, bool* t2_ti
 }
 
 /* ============================================================================
- * ALGORITMO PARALLELO CORE (FASTEST VERSION)
+ * ALGORITMO PARALLELO CORE
  * ============================================================================ */
 
 bool vf2pp_is_isomorphic_openmp(Graph* g1, Graph* g2) {
@@ -107,7 +107,7 @@ bool vf2pp_is_isomorphic_openmp(Graph* g1, Graph* g2) {
     volatile bool global_found = false;
 
     /* REGIONE PARALLELA */
-    #pragma omp parallel
+    #pragma omp parallel  
     {
         int tid = omp_get_thread_num();
         
@@ -119,7 +119,6 @@ bool vf2pp_is_isomorphic_openmp(Graph* g1, Graph* g2) {
             
             if (t2_tilde && candidates_buf) {
                 
-                /* Schedule dynamic, 1 è risultato il più stabile nei test precedenti */
                 #pragma omp for schedule(dynamic, 1)
                 for (int i = 0; i < total_candidates; i++) {
                     
@@ -236,7 +235,7 @@ bool vf2pp_is_isomorphic_openmp(Graph* g1, Graph* g2) {
 }
 
 /* ============================================================================
- * HELPER FUNCTIONS (Config, Stats, etc.)
+ * HELPER FUNCTIONS
  * ============================================================================ */
 
 VF2OpenMPConfig vf2_openmp_default_config(void) {
@@ -315,67 +314,9 @@ bool vf2_openmp_verify_mapping(const Graph* g1, const Graph* g2, const int* mapp
     return true;
 }
 
-/* ============================================================================
- * WRAPPERS E BATCH
- * ============================================================================ */
-
-bool vf2pp_run_single_mode(const char* g1_path, const char* g2_path, int num_threads, 
-                          double* time_load, double* time_total) {
-    double start_total = omp_get_wtime();
-    double start_load = omp_get_wtime();
-    Graph* g1 = graph_read_from_file(g1_path);
-    Graph* g2 = graph_read_from_file(g2_path);
-    double end_load = omp_get_wtime();
-    
-    if (time_load) *time_load = end_load - start_load;
-    
-    if (!g1 || !g2) {
-        if (g1) graph_free(g1);
-        if (g2) graph_free(g2);
-        return false;
+bool vf2pp_is_isomorphic_openmp_config(Graph* g1, Graph* g2, const VF2OpenMPConfig* config) {
+    if (config && config->num_threads > 0) {
+        omp_set_num_threads(config->num_threads);
     }
-
-    VF2OpenMPConfig config = vf2_openmp_default_config();
-    config.num_threads = num_threads;
-    
-    VF2OpenMPResult res = vf2pp_find_isomorphism_openmp(g1, g2, &config);
-    bool is_iso = res.found;
-    vf2_openmp_result_free(&res);
-    
-    graph_free(g1);
-    graph_free(g2);
-    
-    double end_total = omp_get_wtime();
-    if (time_total) *time_total = end_total - start_total;
-    return is_iso;
-}
-
-int vf2pp_batch_openmp(const char** g1_paths, const char** g2_paths, 
-                       int num_pairs, VF2BatchResult* results, int num_threads) {
-    if (num_threads > 0) omp_set_num_threads(num_threads);
-
-    #pragma omp parallel for schedule(dynamic, 1)
-    for (int i = 0; i < num_pairs; i++) {
-        double t_start = omp_get_wtime();
-        Graph* g1 = graph_read_from_file(g1_paths[i]);
-        Graph* g2 = graph_read_from_file(g2_paths[i]);
-        
-        results[i].pair_id = i;
-        if (g1 && g2) {
-            results[i].num_nodes = g1->num_nodes;
-            results[i].num_edges = g1->num_edges;
-            results[i].is_isomorphic = vf2pp_is_isomorphic_openmp(g1, g2);
-            results[i].ram_mb = (double)(graph_memory_size(g1) + graph_memory_size(g2)) / (1024.0 * 1024.0);
-            graph_free(g1);
-            graph_free(g2);
-        } else {
-            results[i].is_isomorphic = false;
-            results[i].num_nodes = 0;
-        }
-        
-        results[i].time_total = omp_get_wtime() - t_start;
-        results[i].time_algo = results[i].time_total;
-        results[i].time_load = 0;
-    }
-    return 0;
+    return vf2pp_is_isomorphic_openmp(g1, g2);
 }
