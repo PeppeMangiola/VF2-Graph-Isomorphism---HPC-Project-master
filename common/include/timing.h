@@ -1,8 +1,7 @@
 /*
  * VF2++ Graph Isomorphism - Timing Utilities
  * HPC Project
- * 
- * Funzioni per misurare il tempo con alta precisione
+ * * Funzioni per misurare il tempo con alta precisione
  */
 
 #ifndef VF2PP_TIMING_H
@@ -11,16 +10,31 @@
 #include <time.h>
 #include <stdint.h>
 
+/* AGGIUNTA PER WINDOWS: Header necessario */
+#ifdef _WIN32
+    #include <windows.h>
+#endif
+
 /* ============================================================================
  * STRUTTURE
  * ============================================================================ */
 
 /**
- * Timer ad alta precisione usando CLOCK_MONOTONIC
+ * Timer ad alta precisione
+ * - Linux: usa clock_gettime / CLOCK_MONOTONIC
+ * - Windows: usa QueryPerformanceCounter
  */
 typedef struct {
+#ifdef _WIN32
+    /* Strutture specifiche Windows */
+    LARGE_INTEGER start;
+    LARGE_INTEGER end;
+    LARGE_INTEGER frequency;
+#else
+    /* Strutture originali Linux */
     struct timespec start;
     struct timespec end;
+#endif
 } Timer;
 
 /**
@@ -43,7 +57,12 @@ typedef struct {
  * @param timer Puntatore al timer
  */
 static inline void timer_start(Timer* timer) {
+#ifdef _WIN32
+    QueryPerformanceFrequency(&timer->frequency);
+    QueryPerformanceCounter(&timer->start);
+#else
     clock_gettime(CLOCK_MONOTONIC, &timer->start);
+#endif
 }
 
 /**
@@ -51,7 +70,11 @@ static inline void timer_start(Timer* timer) {
  * @param timer Puntatore al timer
  */
 static inline void timer_stop(Timer* timer) {
+#ifdef _WIN32
+    QueryPerformanceCounter(&timer->end);
+#else
     clock_gettime(CLOCK_MONOTONIC, &timer->end);
+#endif
 }
 
 /**
@@ -60,24 +83,15 @@ static inline void timer_stop(Timer* timer) {
  * @return Tempo in secondi (double)
  */
 static inline double timer_elapsed(const Timer* timer) {
+#ifdef _WIN32
+    /* Calcolo per Windows */
+    return (double)(timer->end.QuadPart - timer->start.QuadPart) / (double)timer->frequency.QuadPart;
+#else
+    /* Calcolo originale per Linux */
     double start_sec = timer->start.tv_sec + timer->start.tv_nsec / 1e9;
     double end_sec = timer->end.tv_sec + timer->end.tv_nsec / 1e9;
     return end_sec - start_sec;
+#endif
 }
 
-/**
- * Calcola statistiche da un array di tempi
- * @param times Array di tempi
- * @param num_samples Numero di campioni
- * @return Struttura con statistiche
- */
-TimingStats timing_compute_stats(const double* times, int num_samples);
-
-/**
- * Stampa statistiche formattate
- * @param stats Statistiche
- * @param label Etichetta descrittiva
- */
-void timing_print_stats(const TimingStats* stats, const char* label);
-
-#endif /* VF2PP_TIMING_H */
+#endif // VF2PP_TIMING_H
