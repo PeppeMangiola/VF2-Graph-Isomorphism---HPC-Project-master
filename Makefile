@@ -17,7 +17,7 @@ NVCC     = nvcc
 # Flag di base
 CFLAGS_BASE  = -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=199309L
 LDFLAGS      = -lm
-LDFLAGS_CUDA  = 
+LDFLAGS_CUDA = 
 
 # Flag OpenMP
 OMP_FLAGS    = -fopenmp
@@ -57,12 +57,12 @@ OMP_HEADERS    = $(OMP_INC)/vf2pp_openmp.h
 # TARGET PRINCIPALI
 # =============================================================================
 
-.PHONY: all clean help gen_inputs inputs test sequential openmp mpi cuda \
+.PHONY: all clean help inputs test sequential openmp mpi cuda \
         test_seq benchmark_seq test_mpi benchmark_mpi test_openmp benchmark_openmp \
-        inputs_batch benchmark_batch
+        test_cuda benchmark_cuda
 
-all: sequential openmp mpi
-	@echo "=== Build completata (SEQ, OpenMP, MPI) ==="
+all: sequential openmp mpi cuda
+	@echo "=== Build completata (SEQ, OpenMP, MPI, CUDA) ==="
 
 help:
 	@echo "=============================================="
@@ -76,35 +76,31 @@ help:
 	@echo "  make openmp       - Compila versione OpenMP (O0-O3)"
 	@echo "  make mpi          - Compila versione MPI (O0-O3)"
 	@echo "  make cuda         - Compila versione CUDA (O0-O3)"
-	@echo "  make all          - Compila SEQ + OpenMP + MPI"
+	@echo "  make all          - Compila tutte le versioni"
 	@echo ""
 	@echo "INPUT (WSL con python3):"
 	@echo "  make inputs       - Genera input test (1MB-500MB)"
-	@echo "  make inputs_batch - Genera input batch (20 coppie da 1MB)"
 	@echo ""
-	@echo "BENCHMARK SEQUENZIALE (WSL):"
-	@echo "  make test_seq     - Test rapido su 1MB"
-	@echo "  make benchmark_seq- Benchmark completo (O0-O3)"
-	@echo ""
-	@echo "BENCHMARK OPENMP (WSL):"
-	@echo "  make test_openmp    - Test rapido OpenMP (1MB, 4 thread)"
-	@echo "  make benchmark_openmp - Benchmark completo (O0-O3, 1-8 thread)"
-	@echo ""
-	@echo "BENCHMARK MPI (WSL):"
-	@echo "  make test_mpi       - Test rapido MPI (1MB, np=2)"
-	@echo "  make benchmark_mpi  - Benchmark single-pair (O0-O3, np=2,4)"
-	@echo "  make benchmark_batch- Benchmark batch (np=1,2,4)"
+	@echo "BENCHMARK (WSL):"
+	@echo "  make test_seq       - Test rapido sequenziale"
+	@echo "  make benchmark_seq  - Benchmark completo sequenziale"
+	@echo "  make test_openmp    - Test rapido OpenMP"
+	@echo "  make benchmark_openmp - Benchmark completo OpenMP"
+	@echo "  make test_mpi       - Test rapido MPI"
+	@echo "  make benchmark_mpi  - Benchmark completo MPI"
+	@echo "  make test_cuda      - Test rapido CUDA"
+	@echo "  make benchmark_cuda - Benchmark completo CUDA"
 	@echo ""
 	@echo ">>> GRAFICI - ESEGUIRE DA POWERSHELL <<<"
 	@echo ""
 	@echo "  python sequential\\scripts\\plot_benchmark.py"
 	@echo "  python openmp\\scripts\\plot_openmp_results.py"
-	@echo "  python mpi\\scripts\\plot_mpi_optimizers.py"
-	@echo "  python mpi\\scripts\\plot_mpi_vs_seq.py"
+	@echo "  python mpi\\scripts\\plot_mpi_results.py"
+	@echo "  python cuda\\scripts\\plot_cuda_results.py"
 	@echo ""
 	@echo "PULIZIA (WSL):"
 	@echo "  make clean        - Rimuove build/"
-	@echo "  make clean_all    - Rimuove build/ e input"
+	@echo "  make clean_all    - Rimuove build/, input e risultati"
 	@echo ""
 
 # =============================================================================
@@ -125,12 +121,6 @@ inputs: | $(INPUT_DIR)
 	@echo "=== Generazione input (Python/NetworkX) ==="
 	cd $(INPUT_BASE) && python3 gen_inputs.py
 	@echo "[OK] Input generati in $(INPUT_DIR)/"
-
-inputs_batch:
-	@echo "=== Generazione input batch ==="
-	@mkdir -p inputs/batch
-	cd inputs && python3 generate_batch_inputs.py 20 5
-	@echo "[OK] Input batch generati in inputs/batch/"
 
 # =============================================================================
 # VERSIONE SEQUENZIALE
@@ -202,22 +192,14 @@ $(BUILD_DIR)/vf2pp_mpi_O3: $(MPI_MAIN) $(MPI_VF2) $(COMMON_SOURCES) $(COMMON_HEA
 	$(MPICC) $(CFLAGS_BASE) -O3 $(MPI_ALL_INC) $(MPI_ALL_SRC) -o $@ $(LDFLAGS)
 
 # =============================================================================
-# VERSIONE CUDA (Ottimizzata)
+# VERSIONE CUDA
 # =============================================================================
 
-CUDA_MAIN    = $(CUDA_SRC)/main_cuda.c
-CUDA_KERNEL  = $(CUDA_SRC)/vf2pp_cuda.cu
-CUDA_KERNEL_BATCH = $(CUDA_SRC)/vf2pp_cuda_batch.cu
-
-# Flag CUDA aggiuntivi per ottimizzazione
-CUDA_OPT_FLAGS = --use_fast_math -Xptxas=-v
+CUDA_MAIN   = $(CUDA_SRC)/main_cuda.c
+CUDA_KERNEL = $(CUDA_SRC)/vf2pp_cuda.cu
 
 cuda: $(addprefix $(BUILD_DIR)/vf2pp_cuda_, $(OPT_LEVELS))
 	@echo "[OK] Versione CUDA compilata (O0-O3)"
-
-# Versione batch separata
-cuda_batch: $(addprefix $(BUILD_DIR)/vf2pp_cuda_batch_, $(OPT_LEVELS))
-	@echo "[OK] Versione CUDA Batch compilata (O0-O3)"
 
 $(BUILD_DIR)/vf2pp_cuda_O0: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
 	$(NVCC) $(CUDA_FLAGS) -O0 -g -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
@@ -226,26 +208,13 @@ $(BUILD_DIR)/vf2pp_cuda_O1: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMM
 	$(NVCC) $(CUDA_FLAGS) -O1 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 $(BUILD_DIR)/vf2pp_cuda_O2: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O2 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+	$(NVCC) $(CUDA_FLAGS) -O2 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 $(BUILD_DIR)/vf2pp_cuda_O3: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O3 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
-
-# Build batch version
-$(BUILD_DIR)/vf2pp_cuda_batch_O0: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O0 -g -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
-
-$(BUILD_DIR)/vf2pp_cuda_batch_O1: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O1 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
-
-$(BUILD_DIR)/vf2pp_cuda_batch_O2: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O2 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
-
-$(BUILD_DIR)/vf2pp_cuda_batch_O3: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O3 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+	$(NVCC) $(CUDA_FLAGS) -O3 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 # =============================================================================
-# TEST E BENCHMARK SEQUENZIALE (WSL)
+# TEST E BENCHMARK SEQUENZIALE
 # =============================================================================
 
 test_seq: sequential
@@ -261,11 +230,10 @@ benchmark_seq: sequential
 	@mkdir -p sequential/output
 	bash sequential/scripts/run_seq_tests.sh
 	@echo ""
-	@echo "[INFO] Per grafici, esegui da PowerShell:"
-	@echo "       python sequential\\scripts\\plot_benchmark.py"
+	@echo "[INFO] Per grafici: python sequential\\scripts\\plot_benchmark.py"
 
 # =============================================================================
-# TEST E BENCHMARK OPENMP (WSL)
+# TEST E BENCHMARK OPENMP
 # =============================================================================
 
 test_openmp: openmp
@@ -283,11 +251,10 @@ benchmark_openmp: sequential openmp
 	@mkdir -p openmp/plots
 	bash openmp/scripts/run_openmp_tests.sh
 	@echo ""
-	@echo "[INFO] Per grafici, esegui da PowerShell:"
-	@echo "       python openmp\\scripts\\plot_openmp_results.py"
+	@echo "[INFO] Per grafici: python openmp\\scripts\\plot_openmp_results.py"
 
 # =============================================================================
-# TEST E BENCHMARK MPI (WSL)
+# TEST E BENCHMARK MPI
 # =============================================================================
 
 test_mpi: mpi
@@ -300,39 +267,25 @@ test_mpi: mpi
 	mpirun --oversubscribe -np 2 ./$(BUILD_DIR)/vf2pp_mpi_O3 $(INPUT_DIR)/1MB_diff_g1.txt $(INPUT_DIR)/1MB_diff_g2.txt
 
 benchmark_mpi: sequential mpi
-	@echo "=== Benchmark MPI single-pair ==="
+	@echo "=== Benchmark MPI ==="
 	@mkdir -p mpi/output
+	@mkdir -p mpi/plots
 	bash mpi/scripts/run_mpi_tests.sh
 	@echo ""
-	@echo "[INFO] Per grafici, esegui da PowerShell:"
-	@echo "       python mpi\\scripts\\plot_mpi_optimizers.py"
-	@echo "       python mpi\\scripts\\plot_mpi_vs_seq.py"
+	@echo "[INFO] Per grafici: python mpi\\scripts\\plot_mpi_results.py"
 
 # =============================================================================
-# BENCHMARK BATCH MPI (WSL)
-# =============================================================================
-
-benchmark_batch: mpi
-	@echo "=== Benchmark Batch MPI ==="
-	@mkdir -p mpi/output
-	@mkdir -p inputs/batch
-	bash mpi/scripts/benchmark_batch.sh
-	@echo ""
-	@echo "[INFO] Per grafici, esegui da PowerShell:"
-	@echo "       python mpi\\scripts\\plot_batch_results.py"
-
-# =============================================================================
-# TEST E BENCHMARK CUDA (WSL)
+# TEST E BENCHMARK CUDA
 # =============================================================================
 
 test_cuda: cuda
 	@echo "=== Test rapido CUDA (1MB) ==="
 	@mkdir -p cuda/output
 	@echo "--- Grafi isomorfi ---"
-	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_iso_g1.txt $(INPUT_DIR)/1MB_iso_g2.txt 0 256
+	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_iso_g1.txt $(INPUT_DIR)/1MB_iso_g2.txt 0 256 0
 	@echo ""
 	@echo "--- Grafi non isomorfi ---"
-	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_diff_g1.txt $(INPUT_DIR)/1MB_diff_g2.txt 0 256
+	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_diff_g1.txt $(INPUT_DIR)/1MB_diff_g2.txt 0 256 0
 
 benchmark_cuda: sequential cuda
 	@echo "=== Benchmark CUDA ==="
@@ -340,8 +293,7 @@ benchmark_cuda: sequential cuda
 	@mkdir -p cuda/plots
 	bash cuda/scripts/run_cuda_tests.sh
 	@echo ""
-	@echo "[INFO] Per grafici, esegui da PowerShell:"
-	@echo "       python cuda\\scripts\\plot_cuda_results.py"
+	@echo "[INFO] Per grafici: python cuda\\scripts\\plot_cuda_results.py"
 
 # =============================================================================
 # PULIZIA
@@ -358,14 +310,13 @@ clean_results:
 	rm -f openmp/plots/*.png
 	rm -f mpi/output/*.csv
 	rm -f mpi/plots/*.png
+	rm -f cuda/output/*.csv
+	rm -f cuda/plots/*.png
 	@echo "[OK] Risultati rimossi"
 
 clean_inputs:
 	rm -f $(INPUT_DIR)/*.txt
-	rm -f inputs/batch/*.txt
-	rm -f inputs/batch/*.json
 	@echo "[OK] Input rimossi"
 
 clean_all: clean clean_inputs clean_results
 	@echo "[OK] Pulizia completa"
-
