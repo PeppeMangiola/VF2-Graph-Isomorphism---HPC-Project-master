@@ -1,0 +1,4 @@
+Size,Type,Nodes,Edges,RAM_MB,Threads,Time_Load_s,Time_VF2_s,Time_Total_s,Seq_Time_s,Speedup,Throughput_MB_s
+1MB,iso,1200,61934,0,64,0,0,0,0.004949,0,0
+1MB,diff,1200,61934,0,64,0,0,0,0.000293,0,0
+50MB,iso,10000,3246798,0,64,0,0,0,1.150927,0,0
