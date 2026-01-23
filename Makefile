@@ -17,12 +17,13 @@ NVCC     = nvcc
 # Flag di base
 CFLAGS_BASE  = -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=199309L
 LDFLAGS      = -lm
+LDFLAGS_CUDA  = 
 
 # Flag OpenMP
 OMP_FLAGS    = -fopenmp
 
 # Flag CUDA
-CUDA_FLAGS   = -arch=sm_60
+CUDA_FLAGS   = -arch=native
 
 # Livelli di ottimizzazione
 OPT_LEVELS   = O0 O1 O2 O3
@@ -201,26 +202,47 @@ $(BUILD_DIR)/vf2pp_mpi_O3: $(MPI_MAIN) $(MPI_VF2) $(COMMON_SOURCES) $(COMMON_HEA
 	$(MPICC) $(CFLAGS_BASE) -O3 $(MPI_ALL_INC) $(MPI_ALL_SRC) -o $@ $(LDFLAGS)
 
 # =============================================================================
-# VERSIONE CUDA
+# VERSIONE CUDA (Ottimizzata)
 # =============================================================================
 
 CUDA_MAIN    = $(CUDA_SRC)/main_cuda.c
-CUDA_KERNEL  = $(CUDA_SRC)/vf2pp_kernel.cu
+CUDA_KERNEL  = $(CUDA_SRC)/vf2pp_cuda.cu
+CUDA_KERNEL_BATCH = $(CUDA_SRC)/vf2pp_cuda_batch.cu
+
+# Flag CUDA aggiuntivi per ottimizzazione
+CUDA_OPT_FLAGS = --use_fast_math -Xptxas=-v
 
 cuda: $(addprefix $(BUILD_DIR)/vf2pp_cuda_, $(OPT_LEVELS))
 	@echo "[OK] Versione CUDA compilata (O0-O3)"
 
+# Versione batch separata
+cuda_batch: $(addprefix $(BUILD_DIR)/vf2pp_cuda_batch_, $(OPT_LEVELS))
+	@echo "[OK] Versione CUDA Batch compilata (O0-O3)"
+
 $(BUILD_DIR)/vf2pp_cuda_O0: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O0 -g -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+	$(NVCC) $(CUDA_FLAGS) -O0 -g -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 $(BUILD_DIR)/vf2pp_cuda_O1: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O1 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+	$(NVCC) $(CUDA_FLAGS) -O1 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 $(BUILD_DIR)/vf2pp_cuda_O2: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O2 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+	$(NVCC) $(CUDA_FLAGS) -O2 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 $(BUILD_DIR)/vf2pp_cuda_O3: $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
-	$(NVCC) $(CUDA_FLAGS) -O3 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS)
+	$(NVCC) $(CUDA_FLAGS) -O3 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+
+# Build batch version
+$(BUILD_DIR)/vf2pp_cuda_batch_O0: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(CUDA_FLAGS) -O0 -g -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+
+$(BUILD_DIR)/vf2pp_cuda_batch_O1: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(CUDA_FLAGS) -O1 -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+
+$(BUILD_DIR)/vf2pp_cuda_batch_O2: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(CUDA_FLAGS) -O2 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
+
+$(BUILD_DIR)/vf2pp_cuda_batch_O3: $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) $(COMMON_HEADERS) | $(BUILD_DIR)
+	$(NVCC) $(CUDA_FLAGS) -O3 $(CUDA_OPT_FLAGS) -I$(COMMON_INC) $(CUDA_MAIN) $(CUDA_KERNEL_BATCH) $(COMMON_SOURCES) -o $@ $(LDFLAGS_CUDA)
 
 # =============================================================================
 # TEST E BENCHMARK SEQUENZIALE (WSL)
@@ -300,6 +322,28 @@ benchmark_batch: mpi
 	@echo "       python mpi\\scripts\\plot_batch_results.py"
 
 # =============================================================================
+# TEST E BENCHMARK CUDA (WSL)
+# =============================================================================
+
+test_cuda: cuda
+	@echo "=== Test rapido CUDA (1MB) ==="
+	@mkdir -p cuda/output
+	@echo "--- Grafi isomorfi ---"
+	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_iso_g1.txt $(INPUT_DIR)/1MB_iso_g2.txt 0 256
+	@echo ""
+	@echo "--- Grafi non isomorfi ---"
+	./$(BUILD_DIR)/vf2pp_cuda_O3 $(INPUT_DIR)/1MB_diff_g1.txt $(INPUT_DIR)/1MB_diff_g2.txt 0 256
+
+benchmark_cuda: sequential cuda
+	@echo "=== Benchmark CUDA ==="
+	@mkdir -p cuda/output
+	@mkdir -p cuda/plots
+	bash cuda/scripts/run_cuda_tests.sh
+	@echo ""
+	@echo "[INFO] Per grafici, esegui da PowerShell:"
+	@echo "       python cuda\\scripts\\plot_cuda_results.py"
+
+# =============================================================================
 # PULIZIA
 # =============================================================================
 
@@ -324,3 +368,4 @@ clean_inputs:
 
 clean_all: clean clean_inputs clean_results
 	@echo "[OK] Pulizia completa"
+
