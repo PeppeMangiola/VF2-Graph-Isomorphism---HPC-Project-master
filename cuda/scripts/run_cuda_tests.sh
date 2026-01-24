@@ -19,10 +19,10 @@ CSV_FILE="$OUTPUT_DIR/test_cuda.csv"
 SEQ_CSV="$OUTPUT_DIR/seq_baseline.csv"
 
 # Ottimizzazioni da testare
-OPT_LEVELS="O0 O2 O3"
+OPT_LEVELS="O0 O1 O2 O3"
 
 # Configurazioni GPU (threads per block)
-THREAD_CONFIGS="64 128 256 512"
+THREAD_CONFIGS="64"
 
 # Input sizes da testare
 SIZES="1MB 50MB 100MB 200MB 500MB"
